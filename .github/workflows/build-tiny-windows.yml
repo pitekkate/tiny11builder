@@ -19,12 +19,19 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Install Git for Windows
+      - name: Install Git for Windows (Silent)
         run: |
+          # Define URLs and output path
           $url = "https://github.com/git-for-windows/git/releases/download/v2.45.2.windows.1/Git-2.45.2-64-bit.exe "
           $output = "$env:TEMP\git-installer.exe"
+
+          # Download Git installer
           Invoke-WebRequest -Uri $url -OutFile $output
-          Start-Process -FilePath $output -ArgumentList "/SILENT" -Wait
+
+          # Run installer silently
+          Start-Process -FilePath $output -ArgumentList "/VERYSILENT /NORESTART" -Wait
+
+          # Clean up installer
           Remove-Item -Force $output
 
       - name: Clone tiny11builder repo
@@ -42,7 +49,7 @@ jobs:
           python builder.py
 
       - name: Upload ISO as Artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: tiny11-iso
           path: tiny11builder/output/*.iso
