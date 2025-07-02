@@ -6,7 +6,7 @@ on:
       uup_id:
         description: 'UUP Dump ID'
         required: true
-        example: 'bca2cbef-970f-4251-bf19-125a60a63735'
+        default: 'bca2cbef-970f-4251-bf19-125a60a63735'
       edition:
         description: 'Windows Edition'
         required: true
