@@ -36,7 +36,7 @@ Start-Process oscdimg.exe -ArgumentList @(
     $OutputPath
 ) -Wait -NoNewWindow -RedirectStandardOutput ".\oscdimg.log"
 
-if (Test-Path $OutputPath)) {
+if (Test-Path $OutputPath) {
     Write-Host "ISO created at $OutputPath"
 } else {
     throw "ISO creation failed!"
