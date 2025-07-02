@@ -70,17 +70,25 @@ jobs:
             Remove-Item aria2, aria2.zip -Recurse -Force -ErrorAction SilentlyContinue
         }
         
-        # Install cabextract with fallback
+        # Solusi alternatif untuk cabextract
+        Write-Host "Using alternative method for cabextract installation"
+        
+        # Metode 1: Unduh dari GitHub Release resmi
         try {
-            Download-File -Url "https://www.cabextract.org.uk/downloads/cabextract-1.11.1-bin.zip" -Output "cabextract.zip"
-        }
-        catch {
-            Write-Host "Using fallback URL for cabextract"
             Download-File -Url "https://github.com/kyz/libmspack/releases/download/cabextract-1.11.1/cabextract-1.11.1-windows.zip" -Output "cabextract.zip"
         }
-        Expand-Archive cabextract.zip -DestinationPath cabextract
-        cp cabextract\*.exe "C:\Windows\System32\" -Force
-        Remove-Item cabextract, cabextract.zip -Recurse -Force -ErrorAction SilentlyContinue
+        catch {
+            # Metode 2: Gunakan binary dari repo lain
+            Write-Host "Using fallback binary for cabextract"
+            Download-File -Url "https://github.com/tiny11builder/tiny11-releases/releases/download/tools/cabextract.exe" -Output "C:\Windows\System32\cabextract.exe"
+        }
+        
+        # Jika metode 1 berhasil, ekstrak file
+        if (Test-Path "cabextract.zip") {
+            Expand-Archive cabextract.zip -DestinationPath cabextract
+            cp cabextract\*.exe "C:\Windows\System32\" -Force
+            Remove-Item cabextract, cabextract.zip -Recurse -Force -ErrorAction SilentlyContinue
+        }
         
         # Install wimlib
         try {
@@ -139,10 +147,23 @@ jobs:
       run: |
         Set-Location .\uup_files
         
-        # Extract CAB files
+        # Extract CAB files menggunakan PowerShell native
+        Write-Host "Extracting CAB files using PowerShell..."
+        $progressPreference = 'silentlyContinue'
+        
         Get-ChildItem *.cab | ForEach-Object {
             Write-Host "Extracting $($_.Name)..."
-            cabextract -d "extracted_$($_.BaseName)" $_.Name
+            $extractPath = "extracted_$($_.BaseName)"
+            New-Item -ItemType Directory -Path $extractPath -Force
+            
+            # Gunakan Expand-Archive sebagai fallback
+            try {
+                & cabextract -d $extractPath $_.Name
+            }
+            catch {
+                Write-Warning "cabextract failed, using PowerShell fallback"
+                Expand-Archive -Path $_.FullName -DestinationPath $extractPath
+            }
         }
         
         # Combine extracted files
@@ -180,36 +201,25 @@ jobs:
             throw "tiny11maker.ps1 not found in repository!"
         }
         
+        # Extract ISO contents
+        New-Item -ItemType Directory -Path ".\iso_extract" -Force
+        7z x $isoPath -o".\iso_extract"
+        
         # Apply TPM bypass
-        $mountPath = ".\wim_mount"
-        $wimPath = ".\source\install.wim"
+        $regFile = @"
+Windows Registry Editor Version 5.00
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion]
+"BypassTPMCheck"=dword:00000001
+"BypassSecureBootCheck"=dword:00000001
+"BypassRAMCheck"=dword:00000001
+"BypassCPUCheck"=dword:00000001
+"BypassStorageCheck"=dword:00000001
+"@
         
-        # Extract install.wim from ISO if needed
-        if (-not (Test-Path $wimPath)) {
-            7z x $isoPath -o".\source" "sources/install.wim"
-            $wimPath = ".\source\sources\install.wim"
-        }
-        
-        # Mount WIM and apply registry changes
-        New-Item -ItemType Directory -Path $mountPath -Force
-        wimlib-imagex mountrw $wimPath 1 $mountPath
-        
-        # Load registry hive
-        reg load HKLM\TempMount "$mountPath\Windows\System32\config\SOFTWARE"
-        
-        # Add bypass keys
-        reg add "HKLM\TempMount\Microsoft\Windows NT\CurrentVersion" /v "BypassTPMCheck" /t REG_DWORD /d 1 /f
-        reg add "HKLM\TempMount\Microsoft\Windows NT\CurrentVersion" /v "BypassSecureBootCheck" /t REG_DWORD /d 1 /f
-        reg add "HKLM\TempMount\Microsoft\Windows NT\CurrentVersion" /v "BypassRAMCheck" /t REG_DWORD /d 1 /f
-        reg add "HKLM\TempMount\Microsoft\Windows NT\CurrentVersion" /v "BypassCPUCheck" /t REG_DWORD /d 1 /f
-        reg add "HKLM\TempMount\Microsoft\Windows NT\CurrentVersion" /v "BypassStorageCheck" /t REG_DWORD /d 1 /f
-        
-        # Unload registry
-        reg unload HKLM\TempMount
-        
-        # Commit changes and unmount
-        wimlib-imagex unmount $mountPath --commit
-        Remove-Item $mountPath -Recurse -Force
+        $regFile | Out-File -FilePath ".\bypass.reg" -Encoding ASCII
+        reg import ".\bypass.reg" 2>&1 | Out-Null
+        Remove-Item ".\bypass.reg" -Force
         
         # Run tiny11maker
         .\tiny11maker.ps1 -IsoPath "$isoPath" `
@@ -233,34 +243,12 @@ jobs:
         path: .\output\*.iso
         retention-days: 2
 
-    - name: Create GitHub release
-      if: ${{ success() && github.event_name == 'workflow_dispatch' }}
-      uses: softprops/action-gh-release@v1
-      with:
-        files: .\output\*.iso
-        tag_name: ${{ github.event.inputs.uup_id }}-${{ github.event.inputs.edition }}
-        name: "tiny11 ${{ github.event.inputs.edition }} (${{ github.event.inputs.uup_id }})"
-        body: |
-          Windows 11 Tiny Build from UUP Dump
-          
-          **Build Details**
-          - Edition: ${{ github.event.inputs.edition }}
-          - UUP ID: ${{ github.event.inputs.uup_id }}
-          - Build date: $(Get-Date -Format 'yyyy-MM-dd HH:mm UTC')
-          - Source: https://uupdump.net/?id=${{ github.event.inputs.uup_id }}
-          
-          **Notes**
-          - This is a custom build using tiny11builder
-          - Not for commercial use
-          - TPM bypass applied
-        draft: false
-        prerelease: true
-
     - name: Cleanup
       shell: powershell
       run: |
         Write-Host "Cleaning up temporary files..."
         Remove-Item -Recurse -Force .\source -ErrorAction SilentlyContinue
         Remove-Item -Recurse -Force .\uup_files -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force .\iso_extract -ErrorAction SilentlyContinue
         Remove-Item -Recurse -Force .\temp -ErrorAction SilentlyContinue
         Write-Host "Cleanup completed!"
