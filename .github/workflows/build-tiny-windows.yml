@@ -3,8 +3,8 @@ name: Build Tiny11 ISO
 on:
   push:
     tags:
-      - 'v*' # Memicu workflow hanya saat ada tag versi baru
-  workflow_dispatch: # Memungkinkan menjalankan manual dari UI
+      - 'v*'
+  workflow_dispatch:
 
 jobs:
   build:
@@ -19,9 +19,13 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Install Git
+      - name: Install Git for Windows
         run: |
-          winget install --id Git.Git -y
+          $url = "https://github.com/git-for-windows/git/releases/download/v2.45.2.windows.1/Git-2.45.2-64-bit.exe "
+          $output = "$env:TEMP\git-installer.exe"
+          Invoke-WebRequest -Uri $url -OutFile $output
+          Start-Process -FilePath $output -ArgumentList "/SILENT" -Wait
+          Remove-Item -Force $output
 
       - name: Clone tiny11builder repo
         run: |
