@@ -4,26 +4,27 @@ param(
     [string]$Edition
 )
 
-# Step 1: Create ISO structure
+# Create ISO structure
 $isoDir = Join-Path $SourcePath "ISO"
 New-Item -ItemType Directory -Path $isoDir -Force
 
-# Step 2: Copy essential files
+# Copy essential files
 Copy-Item -Path "$SourcePath\*" -Destination $isoDir -Recurse -Exclude "*.cab"
 
-# Step 3: Process install.wim
+# Process install.wim
 $wimFile = Join-Path $SourcePath "install.wim"
-$tempMount = Join-Path $SourcePath "mount"
-
-if (Test-Path $wimFile) {
-    # Create basic image
-    New-WindowsImage -ImagePath $wimFile -CapturePath $isoDir -Name "Windows 11 UUP" -LogPath ".\wim.log"
-} else {
-    Write-Error "install.wim not found!"
-    exit 1
+if (-not (Test-Path $wimFile)) {
+    # Find largest wim file if install.wim doesn't exist
+    $wimFile = Get-ChildItem -Path $SourcePath -Filter *.wim | 
+                Sort-Object Length -Descending | 
+                Select-Object -First 1 -ExpandProperty FullName
 }
 
-# Step 4: Build ISO
+if (-not $wimFile) {
+    throw "No WIM file found!"
+}
+
+# Build ISO
 $bootData = '2#p0,e,b"{0}\boot\etfsboot.com"#pEF,e,b"{0}\efi\microsoft\boot\efisys.bin"' -f $isoDir
 Start-Process oscdimg.exe -ArgumentList @(
     "-m",
@@ -35,8 +36,8 @@ Start-Process oscdimg.exe -ArgumentList @(
     $OutputPath
 ) -Wait -NoNewWindow -RedirectStandardOutput ".\oscdimg.log"
 
-if (Test-Path $OutputPath) {
+if (Test-Path $OutputPath)) {
     Write-Host "ISO created at $OutputPath"
 } else {
-    Write-Error "ISO creation failed!"
+    throw "ISO creation failed!"
 }
