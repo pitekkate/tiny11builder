@@ -10,12 +10,13 @@ Write-Host "Output: $OutputPath"
 Write-Host "Edition: $Edition"
 
 # Buat struktur ISO dasar
-New-Item -ItemType Directory -Path "$SourcePath\ISO" -Force
+$isoDir = Join-Path $SourcePath "ISO"
+New-Item -ItemType Directory -Path $isoDir -Force
 
 # Salin semua file ke folder ISO
-Copy-Item -Path "$SourcePath\*" -Destination "$SourcePath\ISO" -Recurse -Exclude "*.cab"
+Copy-Item -Path "$SourcePath\*" -Destination $isoDir -Recurse -Exclude "*.cab"
 
-# Cari file WIM utama
+# Cari file install.wim
 $wimFile = Get-ChildItem -Path $SourcePath -Filter *.wim | 
             Sort-Object Length -Descending | 
             Select-Object -First 1 -ExpandProperty FullName
@@ -26,15 +27,15 @@ if (-not $wimFile) {
 
 Write-Host "Using WIM file: $wimFile"
 
-# Buat ISO menggunakan oscdimg (asumsi oscdimg tersedia)
-$bootData = '2#p0,e,b"{0}\boot\etfsboot.com"#pEF,e,b"{0}\efi\microsoft\boot\efisys.bin"' -f "$SourcePath\ISO"
+# Buat ISO menggunakan oscdimg (asumsi tersedia di sistem)
+$bootData = '2#p0,e,b"{0}\boot\etfsboot.com"#pEF,e,b"{0}\efi\microsoft\boot\efisys.bin"' -f $isoDir
 $oscdimgArgs = @(
     "-m",
     "-o",
     "-u2",
     "-udfver102",
     "-bootdata:$bootData",
-    "$SourcePath\ISO",
+    $isoDir,
     $OutputPath
 )
 
