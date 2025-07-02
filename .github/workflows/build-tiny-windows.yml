@@ -1,45 +1,136 @@
-name: Build Tiny11 ISO
+name: Build tiny11 25H2 ISO
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
 
 jobs:
-  build:
+  build-tiny11-25h2:
     runs-on: windows-latest
-    timeout-minutes: 60
+    timeout-minutes: 240  # Durasi lebih lama untuk build baru
+    env:
+      WIN_VERSION: 25H2
+      EDITION: Professional
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
+    - name: Setup PowerShell environment
+      shell: powershell
+      run: |
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        New-Item -ItemType Directory -Path .\source -Force
+        New-Item -ItemType Directory -Path .\output -Force
+        
+        # Install modul yang diperlukan
+        Install-Module -Name 7Zip4Powershell -Force -Confirm:$false
 
-      - name: Install dependencies
-        run: |
-          pip install requests
+    - name: Download Windows 11 25H2 ISO
+      shell: powershell
+      run: |
+        $url = "https://software.download.prss.microsoft.com/dbazure/Win11_$env:WIN_VERSION_English_x64v2.iso"
+        $output = ".\source\Win11_$env:WIN_VERSION.iso"
+        
+        # Header khusus untuk unduhan Microsoft
+        $headers = @{
+            "Referer" = "https://www.microsoft.com/"
+            "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        }
+        
+        # Unduh dengan retry dan progress
+        $retryCount = 3
+        $retryDelay = 60
+        for ($i = 1; $i -le $retryCount; $i++) {
+            try {
+                Write-Host "Download attempt #$i"
+                Invoke-WebRequest -Uri $url -OutFile $output -Headers $headers -UseBasicParsing -TimeoutSec 1800
+                if (Test-Path $output -PathType Leaf) {
+                    $fileSize = (Get-Item $output).Length / 1GB
+                    Write-Host "Download successful! File size: $($fileSize.ToString('0.00')) GB"
+                    break
+                }
+            }
+            catch {
+                Write-Host "Attempt $i failed: $($_.Exception.Message)"
+                if ($i -lt $retryCount) {
+                    Write-Host "Retrying in $retryDelay seconds..."
+                    Start-Sleep -Seconds $retryDelay
+                } else {
+                    Write-Error "Failed to download after $retryCount attempts"
+                    exit 1
+                }
+            }
+        }
 
-      - name: Clone tiny11builder repo
-        run: |
-          git clone https://github.com/pitekkate/tiny11builder.git 
+    - name: Verify ISO integrity
+      shell: powershell
+      run: |
+        $iso = ".\source\Win11_$env:WIN_VERSION.iso"
+        $hash = (Get-FileHash -Path $iso -Algorithm SHA256).Hash
+        
+        # Daftar hash resmi untuk Windows 11 25H2 (akan diupdate saat rilis)
+        $officialHashes = @{
+            "25H2" = @{
+                "x64" = "EXPECTED_SHA256_HASH"  # Ganti dengan hash resmi saat rilis
+            }
+        }
+        
+        $expectedHash = $officialHashes[$env:WIN_VERSION]["x64"]
+        
+        if ($hash -ne $expectedHash) {
+            Write-Warning "ISO verification failed!"
+            Write-Host "Expected: $expectedHash"
+            Write-Host "Actual:   $hash"
+            Write-Error "ISO integrity check failed. Build aborted."
+            exit 1
+        } else {
+            Write-Host "ISO verification successful!"
+        }
 
-      - name: Install tiny11builder dependencies
-        working-directory: tiny11builder
-        run: |
-          pip install -r requirements.txt
+    - name: Build tiny11 ISO
+      shell: powershell
+      run: |
+        $isoPath = Resolve-Path ".\source\Win11_$env:WIN_VERSION.iso"
+        
+        # Build dengan opsi khusus 25H2
+        .\tiny11maker.ps1 -IsoPath "$isoPath" `
+                           -Edition $env:EDITION `
+                           -NetFx3 `
+                           -ExtraFeatures `
+                           -NoTelemetry `
+                           -CompactOS
+        
+        # Verifikasi output
+        $isoOutput = Get-ChildItem .\output\*$env:WIN_VERSION*.iso
+        if (-not $isoOutput) {
+            Write-Error "Build failed! No ISO file created."
+            exit 1
+        }
+        Write-Host "Created ISO: $($isoOutput.FullName)"
 
-      - name: Run tiny11builder
-        working-directory: tiny11builder
-        run: |
-          python builder.py
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: tiny11-${{ env.WIN_VERSION }}-${{ env.EDITION }}
+        path: .\output\*.iso
+        retention-days: 2
 
-      - name: Upload ISO as Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: tiny11-iso
-          path: tiny11builder/output/*.iso
+    - name: Create release (optional)
+      if: ${{ success() && github.event_name == 'workflow_dispatch' }}
+      uses: softprops/action-gh-release@v1
+      with:
+        files: .\output\*.iso
+        tag_name: ${{ env.WIN_VERSION }}-$(Get-Date -Format 'yyyyMMdd')
+        body: | 
+          Windows 11 ${{ env.WIN_VERSION }} ${{ env.EDITION }} Tiny Build
+          - Generated: $(Get-Date -Format 'o')
+          - Source ISO: ${{ env.WIN_VERSION }} x64
+        draft: false
+        prerelease: true
+
+    - name: Cleanup
+      if: always()
+      shell: powershell
+      run: |
+        Remove-Item -Recurse -Force .\source -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force .\temp -ErrorAction SilentlyContinue
