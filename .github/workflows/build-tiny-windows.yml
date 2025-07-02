@@ -1,10 +1,10 @@
 name: Build Tiny11 ISO
 
 on:
-  workflow_dispatch: # Jalankan manual dari UI
+  workflow_dispatch:
   push:
     tags:
-      - 'v*' # Jalankan saat push tag seperti v1.0
+      - 'v*'
 
 jobs:
   build:
@@ -20,39 +20,15 @@ jobs:
         with:
           python-version: "3.x"
 
-      - name: Install Git for Windows (Silent)
+      - name: Install dependencies
         run: |
-          # Define URLs and output path
-          $url = "https://github.com/git-for-windows/git/releases/download/v2.45.2.windows.1/Git-2.45.2-64-bit.exe "
-          $output = "$env:TEMP\git-installer.exe"
-
-          # Validasi URL (tidak ada spasi)
-          if ($url -ne $url.Trim()) {
-              throw "URL contains whitespace. Please fix the URL."
-          }
-
-          # Download Git installer via curl
-          curl.exe -L -o $output $url
-
-          # Validate file exists
-          if (-Not (Test-Path $output)) {
-              throw "Download failed: Git installer not found at $output"
-          }
-
-          # Run installer silently
-          Start-Process -FilePath $output -ArgumentList "/VERYSILENT /NORESTART" -Wait
-
-          # Clean up installer
-          Remove-Item -Force $output
-
-          # Add git to PATH
-          $env:Path += ";C:\Program Files\Git\bin;C:\Program Files\Git\cmd"
+          pip install requests
 
       - name: Clone tiny11builder repo
         run: |
           git clone https://github.com/pitekkate/tiny11builder.git 
 
-      - name: Install dependencies
+      - name: Install tiny11builder dependencies
         working-directory: tiny11builder
         run: |
           pip install -r requirements.txt
