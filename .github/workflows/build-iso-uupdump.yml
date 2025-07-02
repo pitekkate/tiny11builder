@@ -207,15 +207,15 @@ jobs:
         
         # Apply TPM bypass
         $regFile = @"
-Windows Registry Editor Version 5.00
+        Windows Registry Editor Version 5.00
 
-[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion]
-"BypassTPMCheck"=dword:00000001
-"BypassSecureBootCheck"=dword:00000001
-"BypassRAMCheck"=dword:00000001
-"BypassCPUCheck"=dword:00000001
-"BypassStorageCheck"=dword:00000001
-"@
+        [HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion]
+        "BypassTPMCheck"=dword:00000001
+        "BypassSecureBootCheck"=dword:00000001
+        "BypassRAMCheck"=dword:00000001
+        "BypassCPUCheck"=dword:00000001
+        "BypassStorageCheck"=dword:00000001
+        "@
         
         $regFile | Out-File -FilePath ".\bypass.reg" -Encoding ASCII
         reg import ".\bypass.reg" 2>&1 | Out-Null
