@@ -1,14 +1,15 @@
 name: Build Tiny11 ISO
 
 on:
+  workflow_dispatch: # Jalankan manual dari UI
   push:
     tags:
-      - 'v*'
-  workflow_dispatch:
+      - 'v*' # Jalankan saat ada tag seperti v1.0
 
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -21,18 +22,25 @@ jobs:
 
       - name: Install Git for Windows (Silent)
         run: |
-          # Define URLs and output path
           $url = "https://github.com/git-for-windows/git/releases/download/v2.45.2.windows.1/Git-2.45.2-64-bit.exe "
           $output = "$env:TEMP\git-installer.exe"
 
-          # Download Git installer
-          Invoke-WebRequest -Uri $url -OutFile $output
+          # Download Git installer via curl
+          curl.exe -L -o $output $url
+
+          # Validate file exists
+          if (-Not (Test-Path $output)) {
+              throw "Download failed: Git installer not found at $output"
+          }
 
           # Run installer silently
           Start-Process -FilePath $output -ArgumentList "/VERYSILENT /NORESTART" -Wait
 
           # Clean up installer
           Remove-Item -Force $output
+
+          # Add git to PATH
+          $env:Path += ";C:\Program Files\Git\bin;C:\Program Files\Git\cmd"
 
       - name: Clone tiny11builder repo
         run: |
@@ -49,7 +57,7 @@ jobs:
           python builder.py
 
       - name: Upload ISO as Artifact
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: tiny11-iso
           path: tiny11builder/output/*.iso
