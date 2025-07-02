@@ -37,78 +37,20 @@ jobs:
         Set-ExecutionPolicy Bypass -Scope Process -Force
         New-Item -ItemType Directory -Path .\source,\output,\uup_files -Force
         
-        # Fungsi download dengan retry dan multiple sources
-        function Download-File {
-            param($Url, $Output)
-            $retryCount = 3
-            $retryDelay = 5
-            
-            for ($i = 1; $i -le $retryCount; $i++) {
-                try {
-                    Invoke-WebRequest -Uri $Url -OutFile $Output -UseBasicParsing
-                    if (Test-Path $Output) { return }
-                }
-                catch {
-                    Write-Warning "Attempt $i failed: $($_.Exception.Message)"
-                    if ($i -lt $retryCount) {
-                        Start-Sleep -Seconds $retryDelay
-                    }
-                }
-            }
-            throw "Failed to download $Url after $retryCount attempts"
-        }
-        
         # Install aria2
-        try {
-            Download-File -Url "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip" -Output "aria2.zip"
-            Expand-Archive aria2.zip -DestinationPath .\aria2
-            Copy-Item -Path ".\aria2\aria2-*\*.exe" -Destination "C:\Windows\System32\" -Force
-        }
-        finally {
-            Remove-Item aria2, aria2.zip -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip" -OutFile aria2.zip
+        Expand-Archive aria2.zip -DestinationPath .\aria2
+        Copy-Item -Path ".\aria2\aria2-*\*.exe" -Destination "C:\Windows\System32\" -Force
         
         # Install wimlib
-        try {
-            Download-File -Url "https://wimlib.net/downloads/wimlib-1.14.1-windows-x86_64-bin.zip" -Output "wimlib.zip"
-            Expand-Archive wimlib.zip -DestinationPath .\wimlib
-            Copy-Item -Path ".\wimlib\wimlib-*\*.exe" -Destination "C:\Windows\System32\" -Force
-        }
-        finally {
-            Remove-Item wimlib, wimlib.zip -Recurse -Force -ErrorAction SilentlyContinue
-        }
+        Invoke-WebRequest -Uri "https://wimlib.net/downloads/wimlib-1.14.1-windows-x86_64-bin.zip" -OutFile wimlib.zip
+        Expand-Archive wimlib.zip -DestinationPath .\wimlib
+        Copy-Item -Path ".\wimlib\wimlib-*\*.exe" -Destination "C:\Windows\System32\" -Force
         
-        # Install cabextract with multiple reliable sources
-        $cabextractInstalled = $false
-        $sources = @(
-            "https://github.com/Processus-Thief/PE-bear/releases/download/1.0/cabextract.exe",
-            "https://github.com/tiny11builder/tiny11-releases/releases/download/tools/cabextract.exe",
-            "https://www.cabextract.org.uk/downloads/cabextract-1.11.1-bin.zip"
-        )
-        
-        foreach ($source in $sources) {
-            try {
-                if ($source -like "*.zip") {
-                    Download-File -Url $source -Output "cabextract.zip"
-                    Expand-Archive cabextract.zip -DestinationPath .\cabextract
-                    Copy-Item -Path ".\cabextract\*.exe" -Destination "C:\Windows\System32\" -Force
-                } else {
-                    Download-File -Url $source -Output "C:\Windows\System32\cabextract.exe"
-                }
-                $cabextractInstalled = $true
-                break
-            }
-            catch {
-                Write-Warning "Failed to install cabextract from $source"
-            }
-            finally {
-                Remove-Item cabextract, cabextract.zip -Recurse -Force -ErrorAction SilentlyContinue
-            }
-        }
-        
-        if (-not $cabextractInstalled) {
-            throw "All cabextract installation attempts failed!"
-        }
+        # Cleanup
+        Remove-Item aria2.zip, wimlib.zip -Force
+        Remove-Item aria2, wimlib -Recurse -Force -ErrorAction SilentlyContinue
         
         # Install PowerShell modules
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
@@ -161,21 +103,14 @@ jobs:
       run: |
         Set-Location .\uup_files
         
-        # Extract CAB files using PowerShell native method as fallback
+        # Extract CAB files using PowerShell native method
         Get-ChildItem *.cab | ForEach-Object {
-            Write-Host "Extracting $($_.Name)..."
-            try {
-                # Try using cabextract first
-                cabextract $_.Name
-            } catch {
-                # Fallback to PowerShell extraction
-                Write-Host "Using PowerShell fallback extraction"
-                $extractPath = "extracted_$($_.BaseName)"
-                New-Item -ItemType Directory -Path $extractPath -Force
-                Expand-Archive -Path $_.FullName -DestinationPath $extractPath
-                Copy-Item -Path "$extractPath\*" -Destination . -Recurse -Force
-                Remove-Item $extractPath -Recurse -Force
-            }
+            Write-Host "Extracting $($_.Name) using PowerShell..."
+            $extractPath = "extracted_$($_.BaseName)"
+            New-Item -ItemType Directory -Path $extractPath -Force
+            Expand-Archive -Path $_.FullName -DestinationPath $extractPath
+            Copy-Item -Path "$extractPath\*" -Destination . -Recurse -Force
+            Remove-Item $extractPath -Recurse -Force
         }
         
         # Create ISO using built-in script
