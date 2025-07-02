@@ -36,25 +36,61 @@ jobs:
       run: |
         Set-ExecutionPolicy Bypass -Scope Process -Force
         New-Item -ItemType Directory -Path .\source,\output,\uup_files -Force
-        Install-PackageProvider -Name NuGet -Force
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
         Install-Module -Name 7Zip4Powershell -Force -Confirm:$false
         
-        # Install dependencies
-        Write-Host "Installing required tools..."
-        Invoke-WebRequest -Uri "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip" -OutFile aria2.zip
-        Expand-Archive aria2.zip -DestinationPath aria2
-        cp aria2\aria2-*\*.exe "C:\Windows\System32\" -Force
-        Remove-Item aria2, aria2.zip -Recurse -Force -ErrorAction SilentlyContinue
+        # Fungsi untuk download dengan retry
+        function Download-File {
+            param($Url, $Output)
+            $retryCount = 3
+            $retryDelay = 5
+            
+            for ($i = 1; $i -le $retryCount; $i++) {
+                try {
+                    Invoke-WebRequest -Uri $Url -OutFile $Output -UseBasicParsing
+                    if (Test-Path $Output) { return }
+                }
+                catch {
+                    Write-Warning "Attempt $i failed: $($_.Exception.Message)"
+                    if ($i -lt $retryCount) {
+                        Start-Sleep -Seconds $retryDelay
+                    }
+                }
+            }
+            throw "Failed to download $Url after $retryCount attempts"
+        }
         
-        Invoke-WebRequest -Uri "https://www.cabextract.org.uk/cabextract-1.11.1-bin.zip" -OutFile cabextract.zip
+        # Install aria2
+        try {
+            Download-File -Url "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip" -Output "aria2.zip"
+            Expand-Archive aria2.zip -DestinationPath aria2
+            cp aria2\aria2-*\*.exe "C:\Windows\System32\" -Force
+        }
+        finally {
+            Remove-Item aria2, aria2.zip -Recurse -Force -ErrorAction SilentlyContinue
+        }
+        
+        # Install cabextract with fallback
+        try {
+            Download-File -Url "https://www.cabextract.org.uk/downloads/cabextract-1.11.1-bin.zip" -Output "cabextract.zip"
+        }
+        catch {
+            Write-Host "Using fallback URL for cabextract"
+            Download-File -Url "https://github.com/kyz/libmspack/releases/download/cabextract-1.11.1/cabextract-1.11.1-windows.zip" -Output "cabextract.zip"
+        }
         Expand-Archive cabextract.zip -DestinationPath cabextract
         cp cabextract\*.exe "C:\Windows\System32\" -Force
         Remove-Item cabextract, cabextract.zip -Recurse -Force -ErrorAction SilentlyContinue
         
-        Invoke-WebRequest -Uri "https://wimlib.net/downloads/wimlib-1.14.1-windows-x86_64-bin.zip" -OutFile wimlib.zip
-        Expand-Archive wimlib.zip -DestinationPath wimlib
-        cp wimlib\wimlib-*\*.exe "C:\Windows\System32\" -Force
-        Remove-Item wimlib, wimlib.zip -Recurse -Force -ErrorAction SilentlyContinue
+        # Install wimlib
+        try {
+            Download-File -Url "https://wimlib.net/downloads/wimlib-1.14.1-windows-x86_64-bin.zip" -Output "wimlib.zip"
+            Expand-Archive wimlib.zip -DestinationPath wimlib
+            cp wimlib\wimlib-*\*.exe "C:\Windows\System32\" -Force
+        }
+        finally {
+            Remove-Item wimlib, wimlib.zip -Recurse -Force -ErrorAction SilentlyContinue
+        }
 
     - name: Download UUP files
       shell: powershell
@@ -144,6 +180,38 @@ jobs:
             throw "tiny11maker.ps1 not found in repository!"
         }
         
+        # Apply TPM bypass
+        $mountPath = ".\wim_mount"
+        $wimPath = ".\source\install.wim"
+        
+        # Extract install.wim from ISO if needed
+        if (-not (Test-Path $wimPath)) {
+            7z x $isoPath -o".\source" "sources/install.wim"
+            $wimPath = ".\source\sources\install.wim"
+        }
+        
+        # Mount WIM and apply registry changes
+        New-Item -ItemType Directory -Path $mountPath -Force
+        wimlib-imagex mountrw $wimPath 1 $mountPath
+        
+        # Load registry hive
+        reg load HKLM\TempMount "$mountPath\Windows\System32\config\SOFTWARE"
+        
+        # Add bypass keys
+        reg add "HKLM\TempMount\Microsoft\Windows NT\CurrentVersion" /v "BypassTPMCheck" /t REG_DWORD /d 1 /f
+        reg add "HKLM\TempMount\Microsoft\Windows NT\CurrentVersion" /v "BypassSecureBootCheck" /t REG_DWORD /d 1 /f
+        reg add "HKLM\TempMount\Microsoft\Windows NT\CurrentVersion" /v "BypassRAMCheck" /t REG_DWORD /d 1 /f
+        reg add "HKLM\TempMount\Microsoft\Windows NT\CurrentVersion" /v "BypassCPUCheck" /t REG_DWORD /d 1 /f
+        reg add "HKLM\TempMount\Microsoft\Windows NT\CurrentVersion" /v "BypassStorageCheck" /t REG_DWORD /d 1 /f
+        
+        # Unload registry
+        reg unload HKLM\TempMount
+        
+        # Commit changes and unmount
+        wimlib-imagex unmount $mountPath --commit
+        Remove-Item $mountPath -Recurse -Force
+        
+        # Run tiny11maker
         .\tiny11maker.ps1 -IsoPath "$isoPath" `
                            -Edition "$edition" `
                            -UUPBuild `
@@ -184,6 +252,7 @@ jobs:
           **Notes**
           - This is a custom build using tiny11builder
           - Not for commercial use
+          - TPM bypass applied
         draft: false
         prerelease: true
 
