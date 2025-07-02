@@ -30,18 +30,18 @@ jobs:
 
           # Validate file exists
           if (-Not (Test-Path $output)) {
-              throw "Download failed: Git installer not found at $output"
+             throw "Download failed: Git installer not found at $output"
           }
 
           # Run installer silently
           Start-Process -FilePath $output -ArgumentList "/VERYSILENT /NORESTART" -Wait
-
+ 
           # Clean up installer
           Remove-Item -Force $output
 
           # Add git to PATH
           $env:Path += ";C:\Program Files\Git\bin;C:\Program Files\Git\cmd"
-
+       
       - name: Clone tiny11builder repo
         run: |
           git clone https://github.com/pitekkate/tiny11builder.git 
