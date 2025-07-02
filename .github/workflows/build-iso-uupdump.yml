@@ -3,17 +3,29 @@ name: Build tiny11 from UUP Dump
 on:
   workflow_dispatch:
     inputs:
-      uup_url:
-        description: 'URL UUP Dump'
+      uup_id:
+        description: 'UUP Dump ID'
         required: true
-        default: 'https://uupdump.net/'
+        example: 'bca2cbef-970f-4251-bf19-125a60a63735'
+      edition:
+        description: 'Windows Edition'
+        required: true
+        default: 'Professional'
+        options:
+          - Professional
+          - Home
+          - Education
+          - Enterprise
+          - ProEducation
+          - ProForWorkstations
+          - EducationProfessional
 
 jobs:
   build-tiny11-uup:
     runs-on: windows-latest
-    timeout-minutes: 300  # 5 jam karena proses lebih kompleks
+    timeout-minutes: 300
     env:
-      EDITION: Professional
+      LANGUAGE: en-us
 
     steps:
     - name: Checkout repository
@@ -27,62 +39,129 @@ jobs:
         Install-PackageProvider -Name NuGet -Force
         Install-Module -Name 7Zip4Powershell -Force -Confirm:$false
         
-        # Install alat yang diperlukan
-        choco install -y aria2 cabextract wimlib
-        refreshenv
+        # Install dependencies
+        Write-Host "Installing required tools..."
+        Invoke-WebRequest -Uri "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip" -OutFile aria2.zip
+        Expand-Archive aria2.zip -DestinationPath aria2
+        cp aria2\aria2-*\*.exe "C:\Windows\System32\" -Force
+        Remove-Item aria2, aria2.zip -Recurse -Force -ErrorAction SilentlyContinue
+        
+        Invoke-WebRequest -Uri "https://www.cabextract.org.uk/cabextract-1.11.1-bin.zip" -OutFile cabextract.zip
+        Expand-Archive cabextract.zip -DestinationPath cabextract
+        cp cabextract\*.exe "C:\Windows\System32\" -Force
+        Remove-Item cabextract, cabextract.zip -Recurse -Force -ErrorAction SilentlyContinue
+        
+        Invoke-WebRequest -Uri "https://wimlib.net/downloads/wimlib-1.14.1-windows-x86_64-bin.zip" -OutFile wimlib.zip
+        Expand-Archive wimlib.zip -DestinationPath wimlib
+        cp wimlib\wimlib-*\*.exe "C:\Windows\System32\" -Force
+        Remove-Item wimlib, wimlib.zip -Recurse -Force -ErrorAction SilentlyContinue
 
     - name: Download UUP files
       shell: powershell
       run: |
-        $uupUrl = "${{ github.event.inputs.uup_url }}"
-        $uupId = $uupUrl.Split('=')[-1]  # Ekstrak ID dari URL
+        $uupId = "${{ github.event.inputs.uup_id }}"
+        $edition = "${{ github.event.inputs.edition }}"
+        $apiUrl = "https://uupdump.net/get.php?id=$uupId&pack=$env:LANGUAGE&edition=$edition"
         
-        # Gunakan API UUP Dump untuk mendapatkan file list
-        $apiUrl = "https://uupdump.net/get.php?id=$uupId&pack=en-us&edition=$env:EDITION"
-        $fileList = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing
+        Write-Host "Downloading UUP files for ID: $uupId"
+        Write-Host "Edition: $edition"
+        Write-Host "API URL: $apiUrl"
         
-        # Simpan file list
+        # Download file list
+        $retryCount = 3
+        $fileList = $null
+        
+        for ($i = 1; $i -le $retryCount; $i++) {
+            try {
+                $response = Invoke-WebRequest -Uri $apiUrl -UseBasicParsing
+                $fileList = $response.Content
+                break
+            }
+            catch {
+                Write-Warning "Attempt $i failed: $($_.Exception.Message)"
+                if ($i -eq $retryCount) {
+                    throw "Failed to download file list after $retryCount attempts"
+                }
+                Start-Sleep -Seconds (10 * $i)
+            }
+        }
+        
         $fileList | Out-File -FilePath .\uup_files\filelist.txt -Encoding UTF8
         
-        # Unduh semua file UUP menggunakan aria2
-        aria2c -i .\uup_files\filelist.txt -d .\uup_files -j 16 -x 16
+        # Download files using aria2c
+        aria2c -i .\uup_files\filelist.txt -d .\uup_files -j 16 -x 16 -c --retry-wait=10
+        
+        # Verify download
+        $cabFiles = Get-ChildItem .\uup_files\*.cab -ErrorAction SilentlyContinue
+        if (-not $cabFiles) {
+            throw "Download failed! No CAB files found"
+        }
+        Write-Host "Downloaded $($cabFiles.Count) CAB files"
 
     - name: Assemble ISO
       shell: powershell
       run: |
-        cd .\uup_files
+        Set-Location .\uup_files
         
-        # Ekstrak file UUP
+        # Extract CAB files
         Get-ChildItem *.cab | ForEach-Object {
-            Expand -R $_.FullName -F:* .\
+            Write-Host "Extracting $($_.Name)..."
+            cabextract -d "extracted_$($_.BaseName)" $_.Name
         }
         
-        # Jalankan skrip pembuatan ISO
-        .\convert-UUP-to-ISO.ps1 -SourcePath . -OutputPath ..\source\Win11_UUP.iso -Edition $env:EDITION
+        # Combine extracted files
+        Get-ChildItem -Directory | Where-Object { $_.Name -like "extracted_*" } | ForEach-Object {
+            Copy-Item -Path "$($_.FullName)\*" -Destination . -Recurse -Force
+            Remove-Item $_.FullName -Recurse -Force
+        }
+        
+        # Create ISO using built-in script
+        if (-not (Test-Path ".\createiso.cmd")) {
+            # Fallback to manual ISO creation
+            Write-Host "createiso.cmd not found! Using manual method..."
+            .\convert-UUP-to-ISO.ps1 -SourcePath . -OutputPath ..\source\Win11_UUP.iso -Edition "${{ github.event.inputs.edition }}"
+        } else {
+            $edition = "${{ github.event.inputs.edition }}"
+            .\createiso.cmd "$edition" ..\source\Win11_UUP.iso
+        }
         
         if (-not (Test-Path ..\source\Win11_UUP.iso)) {
             throw "ISO assembly failed!"
         }
+        Write-Host "ISO created successfully at $(Resolve-Path ..\source\Win11_UUP.iso)"
 
     - name: Build tiny11 ISO
       shell: powershell
       run: |
         $isoPath = Resolve-Path ".\source\Win11_UUP.iso"
+        $edition = "${{ github.event.inputs.edition }}"
+        
+        Write-Host "Building tiny11 for edition: $edition"
+        Write-Host "Using ISO: $isoPath"
+        
+        # Check if tiny11maker exists
+        if (-not (Test-Path ".\tiny11maker.ps1")) {
+            throw "tiny11maker.ps1 not found in repository!"
+        }
         
         .\tiny11maker.ps1 -IsoPath "$isoPath" `
-                           -Edition "$env:EDITION" `
+                           -Edition "$edition" `
                            -UUPBuild `
                            -NoTelemetry `
-                           -CompactOS
+                           -CompactOS `
+                           -Verbose
         
-        if (-not (Test-Path .\output\*.iso)) {
+        $outputIso = Get-ChildItem .\output\*.iso
+        if (-not $outputIso) {
             throw "Build failed! Output ISO not found"
         }
+        Write-Host "tiny11 build completed successfully! Output: $($outputIso.FullName)"
+        Write-Host "File size: $([math]::Round($outputIso.Length / 1GB, 2)) GB"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: tiny11-uup-${{ github.event.inputs.uup_url.split('=')[-1] }}
+        name: tiny11-${{ github.event.inputs.edition }}-${{ github.event.inputs.uup_id }}
         path: .\output\*.iso
         retention-days: 2
 
@@ -91,19 +170,28 @@ jobs:
       uses: softprops/action-gh-release@v1
       with:
         files: .\output\*.iso
-        tag_name: uup-${{ github.event.inputs.uup_url.split('=')[-1] }}-$(Get-Date -Format 'yyyyMMdd')
-        name: "tiny11 UUP Build"
+        tag_name: ${{ github.event.inputs.uup_id }}-${{ github.event.inputs.edition }}
+        name: "tiny11 ${{ github.event.inputs.edition }} (${{ github.event.inputs.uup_id }})"
         body: |
           Windows 11 Tiny Build from UUP Dump
-          - Edition: ${{ env.EDITION }}
-          - UUP ID: ${{ github.event.inputs.uup_url.split('=')[-1] }}
-          - Build date: $(Get-Date -Format 'yyyy-MM-dd HH:mm')
+          
+          **Build Details**
+          - Edition: ${{ github.event.inputs.edition }}
+          - UUP ID: ${{ github.event.inputs.uup_id }}
+          - Build date: $(Get-Date -Format 'yyyy-MM-dd HH:mm UTC')
+          - Source: https://uupdump.net/?id=${{ github.event.inputs.uup_id }}
+          
+          **Notes**
+          - This is a custom build using tiny11builder
+          - Not for commercial use
         draft: false
         prerelease: true
 
     - name: Cleanup
       shell: powershell
       run: |
+        Write-Host "Cleaning up temporary files..."
         Remove-Item -Recurse -Force .\source -ErrorAction SilentlyContinue
         Remove-Item -Recurse -Force .\uup_files -ErrorAction SilentlyContinue
         Remove-Item -Recurse -Force .\temp -ErrorAction SilentlyContinue
+        Write-Host "Cleanup completed!"
