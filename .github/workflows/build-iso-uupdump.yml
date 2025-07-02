@@ -36,26 +36,19 @@ jobs:
       run: |
         Set-ExecutionPolicy Bypass -Scope Process -Force
         New-Item -ItemType Directory -Path .\source,\output,\uup_files -Force
+        
+        # Install Chocolatey package manager
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
+        iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
+        refreshenv
+        
+        # Install dependencies using Chocolatey
+        choco install -y aria2 cabextract wimlib
+        
+        # Install PowerShell modules
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
         Install-Module -Name 7Zip4Powershell -Force -Confirm:$false
-        
-        # Install aria2
-        $ProgressPreference = 'SilentlyContinue'
-        Invoke-WebRequest -Uri "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip" -OutFile aria2.zip
-        Expand-Archive aria2.zip -DestinationPath .\aria2
-        Copy-Item -Path ".\aria2\aria2-*\*.exe" -Destination "C:\Windows\System32\" -Force
-        
-        # Install cabextract (direct executable)
-        Invoke-WebRequest -Uri "https://github.com/tiny11builder/tiny11-releases/releases/download/tools/cabextract.exe" -OutFile "C:\Windows\System32\cabextract.exe"
-        
-        # Install wimlib
-        Invoke-WebRequest -Uri "https://wimlib.net/downloads/wimlib-1.14.1-windows-x86_64-bin.zip" -OutFile wimlib.zip
-        Expand-Archive wimlib.zip -DestinationPath .\wimlib
-        Copy-Item -Path ".\wimlib\wimlib-*\*.exe" -Destination "C:\Windows\System32\" -Force
-        
-        # Cleanup
-        Remove-Item aria2.zip, wimlib.zip -Force
-        Remove-Item aria2, wimlib -Recurse -Force -ErrorAction SilentlyContinue
 
     - name: Download UUP files
       shell: powershell
@@ -134,7 +127,7 @@ jobs:
         Write-Host "Building tiny11 for edition: $edition"
         Write-Host "Using ISO: $isoPath"
         
-        # Run tiny11maker without TPM bypass
+        # Run tiny11maker
         .\tiny11maker.ps1 -IsoPath "$isoPath" `
                            -Edition "$edition" `
                            -UUPBuild `
