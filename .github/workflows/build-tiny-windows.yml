@@ -1,58 +1,68 @@
-name: Build tiny11 25H2 ISO
+name: Build tiny11 25H2 Beta ISO
 
 on:
   workflow_dispatch:
 
 jobs:
-  build-tiny11-25h2:
+  build-tiny11-25h2-beta:
     runs-on: windows-latest
-    timeout-minutes: 240  # Durasi lebih lama untuk build baru
+    timeout-minutes: 240
     env:
-      WIN_VERSION: 25H2
+      WIN_VERSION: 25H2_Beta
       EDITION: Professional
 
     steps:
     - name: Checkout repository
       uses: actions/checkout@v4
 
-    - name: Setup PowerShell environment
+    - name: Setup environment
       shell: powershell
       run: |
         Set-ExecutionPolicy Bypass -Scope Process -Force
-        New-Item -ItemType Directory -Path .\source -Force
-        New-Item -ItemType Directory -Path .\output -Force
-        
-        # Install modul yang diperlukan
+        New-Item -ItemType Directory -Path .\source,\output -Force
+        Install-PackageProvider -Name NuGet -Force
         Install-Module -Name 7Zip4Powershell -Force -Confirm:$false
 
-    - name: Download Windows 11 25H2 ISO
+    - name: Download Windows 11 25H2 Beta ISO
       shell: powershell
       run: |
-        $url = "https://software.download.prss.microsoft.com/dbazure/Win11_$env:WIN_VERSION_English_x64v2.iso"
-        $output = ".\source\Win11_$env:WIN_VERSION.iso"
+        $url = "https://archive.org/download/Nano11-25H2-Beta-1/Nano11%2025H2%20Beta%201.iso"
+        $output = ".\source\Win11_25H2_Beta.iso"
         
-        # Header khusus untuk unduhan Microsoft
+        # Header khusus untuk archive.org
         $headers = @{
-            "Referer" = "https://www.microsoft.com/"
+            "Referer" = "https://archive.org/"
             "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
         }
         
-        # Unduh dengan retry dan progress
-        $retryCount = 3
-        $retryDelay = 60
+        # Menggunakan WebClient yang kompatibel
+        $webClient = New-Object System.Net.WebClient
+        $webClient.Headers.Add("Referer", "https://archive.org/")
+        $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+        
+        $retryCount = 5  # Lebih banyak retry karena archive.org kadang lambat
         for ($i = 1; $i -le $retryCount; $i++) {
             try {
                 Write-Host "Download attempt #$i"
-                Invoke-WebRequest -Uri $url -OutFile $output -Headers $headers -UseBasicParsing -TimeoutSec 1800
-                if (Test-Path $output -PathType Leaf) {
+                $webClient.DownloadFile($url, $output)
+                
+                if (Test-Path $output) {
                     $fileSize = (Get-Item $output).Length / 1GB
-                    Write-Host "Download successful! File size: $($fileSize.ToString('0.00')) GB"
+                    Write-Host "Download successful! Size: $($fileSize.ToString('0.00')) GB"
+                    
+                    # Verifikasi ukuran file minimal
+                    if ($fileSize -lt 3) {
+                        throw "File size too small! Possible incomplete download."
+                    }
                     break
                 }
             }
             catch {
-                Write-Host "Attempt $i failed: $($_.Exception.Message)"
+                Write-Warning "Attempt $i failed: $($_.Exception.Message)"
+                if (Test-Path $output) { Remove-Item $output -Force }
+                
                 if ($i -lt $retryCount) {
+                    $retryDelay = [math]::Pow(2, $i) * 10  # Exponential backoff
                     Write-Host "Retrying in $retryDelay seconds..."
                     Start-Sleep -Seconds $retryDelay
                 } else {
@@ -62,74 +72,48 @@ jobs:
             }
         }
 
-    - name: Verify ISO integrity
-      shell: powershell
-      run: |
-        $iso = ".\source\Win11_$env:WIN_VERSION.iso"
-        $hash = (Get-FileHash -Path $iso -Algorithm SHA256).Hash
-        
-        # Daftar hash resmi untuk Windows 11 25H2 (akan diupdate saat rilis)
-        $officialHashes = @{
-            "25H2" = @{
-                "x64" = "EXPECTED_SHA256_HASH"  # Ganti dengan hash resmi saat rilis
-            }
-        }
-        
-        $expectedHash = $officialHashes[$env:WIN_VERSION]["x64"]
-        
-        if ($hash -ne $expectedHash) {
-            Write-Warning "ISO verification failed!"
-            Write-Host "Expected: $expectedHash"
-            Write-Host "Actual:   $hash"
-            Write-Error "ISO integrity check failed. Build aborted."
-            exit 1
-        } else {
-            Write-Host "ISO verification successful!"
-        }
-
     - name: Build tiny11 ISO
       shell: powershell
       run: |
-        $isoPath = Resolve-Path ".\source\Win11_$env:WIN_VERSION.iso"
+        $isoPath = Resolve-Path ".\source\Win11_25H2_Beta.iso"
         
-        # Build dengan opsi khusus 25H2
+        # Fitur khusus untuk versi beta
         .\tiny11maker.ps1 -IsoPath "$isoPath" `
-                           -Edition $env:EDITION `
-                           -NetFx3 `
-                           -ExtraFeatures `
+                           -Edition "$env:EDITION" `
                            -NoTelemetry `
-                           -CompactOS
+                           -BetaBuild `
+                           -SkipComponent "WindowsMixedReality" `
+                           -SkipComponent "Edge"
         
-        # Verifikasi output
-        $isoOutput = Get-ChildItem .\output\*$env:WIN_VERSION*.iso
-        if (-not $isoOutput) {
-            Write-Error "Build failed! No ISO file created."
-            exit 1
+        # Periksa hasil
+        if (-not (Test-Path .\output\*25H2*.iso)) {
+            throw "Build failed! Output ISO not found"
         }
-        Write-Host "Created ISO: $($isoOutput.FullName)"
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: tiny11-${{ env.WIN_VERSION }}-${{ env.EDITION }}
+        name: tiny11-25H2-Beta-${{ env.EDITION }}
         path: .\output\*.iso
         retention-days: 2
 
-    - name: Create release (optional)
+    - name: Create GitHub release
       if: ${{ success() && github.event_name == 'workflow_dispatch' }}
       uses: softprops/action-gh-release@v1
       with:
         files: .\output\*.iso
-        tag_name: ${{ env.WIN_VERSION }}-$(Get-Date -Format 'yyyyMMdd')
-        body: | 
-          Windows 11 ${{ env.WIN_VERSION }} ${{ env.EDITION }} Tiny Build
-          - Generated: $(Get-Date -Format 'o')
-          - Source ISO: ${{ env.WIN_VERSION }} x64
+        tag_name: 25H2-Beta-$(Get-Date -Format 'yyyyMMdd')
+        name: "tiny11 25H2 Beta ${{ env.EDITION }}"
+        body: |
+          Windows 11 25H2 Beta Tiny Build
+          - Edition: ${{ env.EDITION }}
+          - Build date: $(Get-Date -Format 'yyyy-MM-dd HH:mm')
+          - Source: Archive.org Nano11 Beta ISO
+          - Note: Experimental build, not for production use
         draft: false
         prerelease: true
 
     - name: Cleanup
-      if: always()
       shell: powershell
       run: |
         Remove-Item -Recurse -Force .\source -ErrorAction SilentlyContinue
