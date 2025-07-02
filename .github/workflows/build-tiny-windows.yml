@@ -109,7 +109,7 @@ jobs:
         Write-Host "Created ISO: $($isoOutput.FullName)"
 
     - name: Upload artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: tiny11-${{ env.WIN_VERSION }}-${{ env.EDITION }}
         path: .\output\*.iso
