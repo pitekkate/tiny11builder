@@ -1,0 +1,125 @@
+name: Build tiny11 24H2 ISO
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-tiny11-24h2:
+    runs-on: windows-latest
+    timeout-minutes: 240
+    env:
+      WIN_VERSION: 24H2
+      EDITION: Professional
+      ISO_SHA256: "A8B9C0D1E2F3A4B5C6D7E8F9A0B1C2D3A4B5C6D7E8F9A0B1C2D3A4B5C6D7E8F9"  # Ganti dengan hash resmi
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup environment
+      shell: powershell
+      run: |
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        New-Item -ItemType Directory -Path .\source,\output -Force
+        Install-PackageProvider -Name NuGet -Force
+        Install-Module -Name 7Zip4Powershell -Force -Confirm:$false
+
+    - name: Download Windows 11 24H2 ISO
+      shell: powershell
+      run: |
+        $url = "https://software.download.prss.microsoft.com/dbazure/Win11_24H2_English_x64v2.iso"
+        $output = ".\source\Win11_24H2.iso"
+        
+        $headers = @{
+            "Referer" = "https://www.microsoft.com/"
+            "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+        }
+        
+        # Unduh dengan resume dan retry
+        $retryCount = 3
+        for ($i = 1; $i -le $retryCount; $i++) {
+            try {
+                Write-Host "Download attempt #$i"
+                Invoke-WebRequest -Uri $url -OutFile $output -Headers $headers -UseBasicParsing -TimeoutSec 1800 -Resume
+                if (Test-Path $output) {
+                    Write-Host "Download completed successfully"
+                    break
+                }
+            }
+            catch {
+                Write-Warning "Attempt $i failed: $($_.Exception.Message)"
+                if ($i -lt $retryCount) {
+                    Start-Sleep -Seconds 60
+                } else {
+                    exit 1
+                }
+            }
+        }
+
+    - name: Verify ISO integrity
+      shell: powershell
+      run: |
+        $isoPath = ".\source\Win11_24H2.iso"
+        $computedHash = (Get-FileHash -Path $isoPath -Algorithm SHA256).Hash
+        
+        if ($computedHash -ne "$env:ISO_SHA256") {
+            Write-Error "ISO verification failed! Expected: $env:ISO_SHA256 Actual: $computedHash"
+            exit 1
+        } else {
+            Write-Host "ISO verification passed!"
+        }
+
+    - name: Build tiny11 ISO
+      shell: powershell
+      run: |
+        $isoPath = Resolve-Path ".\source\Win11_24H2.iso"
+        
+        # Fitur khusus untuk 24H2
+        .\tiny11maker.ps1 -IsoPath "$isoPath" `
+                           -Edition "$env:EDITION" `
+                           -NoTelemetry `
+                           -CompactOS `
+                           -RemoveCopilot `
+                           -SkipComponent "WindowsMixedReality" `
+                           -OptimizeSSD
+        
+        # Periksa hasil
+        if (-not (Test-Path .\output\*24H2*.iso)) {
+            throw "Build failed! Output ISO not found"
+        }
+
+    - name: Compress ISO (optional)
+      shell: powershell
+      run: |
+        7z a -t7z -mx=9 -mmt=on ".\output\tiny11-24H2.7z" ".\output\*.iso"
+        Remove-Item -Path ".\output\*.iso" -Force
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: tiny11-24H2-${{ env.EDITION }}
+        path: |
+          .\output\*.iso
+          .\output\*.7z
+        retention-days: 2
+
+    - name: Create GitHub release
+      if: ${{ success() && github.event_name == 'workflow_dispatch' }}
+      uses: softprops/action-gh-release@v1
+      with:
+        files: .\output\*
+        tag_name: 24H2-$(Get-Date -Format 'yyyyMMdd')
+        name: "tiny11 24H2 ${{ env.EDITION }}"
+        body: |
+          Windows 11 24H2 Tiny Build
+          - Edition: ${{ env.EDITION }}
+          - Build date: $(Get-Date -Format 'yyyy-MM-dd HH:mm')
+          - Source: Microsoft Windows 11 24H2 ISO
+        draft: false
+        prerelease: true
+
+    - name: Cleanup
+      shell: powershell
+      run: |
+        Remove-Item -Recurse -Force .\source -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force .\temp -ErrorAction SilentlyContinue
