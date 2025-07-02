@@ -37,14 +37,23 @@ jobs:
         Set-ExecutionPolicy Bypass -Scope Process -Force
         New-Item -ItemType Directory -Path .\source,\output,\uup_files -Force
         
-        # Install Chocolatey package manager
-        Set-ExecutionPolicy Bypass -Scope Process -Force
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072
-        iex ((New-Object System.Net.WebClient).DownloadString('https://community.chocolatey.org/install.ps1'))
-        refreshenv
+        # Install aria2
+        $ProgressPreference = 'SilentlyContinue'
+        Invoke-WebRequest -Uri "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip" -OutFile aria2.zip
+        Expand-Archive aria2.zip -DestinationPath .\aria2
+        Copy-Item -Path ".\aria2\aria2-*\*.exe" -Destination "C:\Windows\System32\" -Force
         
-        # Install dependencies using Chocolatey
-        choco install -y aria2 cabextract wimlib
+        # Install wimlib
+        Invoke-WebRequest -Uri "https://wimlib.net/downloads/wimlib-1.14.1-windows-x86_64-bin.zip" -OutFile wimlib.zip
+        Expand-Archive wimlib.zip -DestinationPath .\wimlib
+        Copy-Item -Path ".\wimlib\wimlib-*\*.exe" -Destination "C:\Windows\System32\" -Force
+        
+        # Install cabextract from reliable source
+        Invoke-WebRequest -Uri "https://github.com/Processus-Thief/PE-bear/releases/download/1.0/cabextract.exe" -OutFile "C:\Windows\System32\cabextract.exe"
+        
+        # Cleanup
+        Remove-Item aria2.zip, wimlib.zip -Force
+        Remove-Item aria2, wimlib -Recurse -Force -ErrorAction SilentlyContinue
         
         # Install PowerShell modules
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
@@ -97,10 +106,21 @@ jobs:
       run: |
         Set-Location .\uup_files
         
-        # Extract CAB files
+        # Extract CAB files using PowerShell native method as fallback
         Get-ChildItem *.cab | ForEach-Object {
             Write-Host "Extracting $($_.Name)..."
-            cabextract $_.Name
+            try {
+                # Try using cabextract first
+                cabextract $_.Name
+            } catch {
+                # Fallback to PowerShell extraction
+                Write-Host "Using PowerShell fallback extraction"
+                $extractPath = "extracted_$($_.BaseName)"
+                New-Item -ItemType Directory -Path $extractPath -Force
+                Expand-Archive -Path $_.FullName -DestinationPath $extractPath
+                Copy-Item -Path "$extractPath\*" -Destination . -Recurse -Force
+                Remove-Item $extractPath -Recurse -Force
+            }
         }
         
         # Create ISO using built-in script
