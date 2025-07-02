@@ -1,0 +1,109 @@
+name: Build tiny11 from UUP Dump
+
+on:
+  workflow_dispatch:
+    inputs:
+      uup_url:
+        description: 'URL UUP Dump'
+        required: true
+        default: 'https://uupdump.net/'
+
+jobs:
+  build-tiny11-uup:
+    runs-on: windows-latest
+    timeout-minutes: 300  # 5 jam karena proses lebih kompleks
+    env:
+      EDITION: Professional
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup environment
+      shell: powershell
+      run: |
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        New-Item -ItemType Directory -Path .\source,\output,\uup_files -Force
+        Install-PackageProvider -Name NuGet -Force
+        Install-Module -Name 7Zip4Powershell -Force -Confirm:$false
+        
+        # Install alat yang diperlukan
+        choco install -y aria2 cabextract wimlib
+        refreshenv
+
+    - name: Download UUP files
+      shell: powershell
+      run: |
+        $uupUrl = "${{ github.event.inputs.uup_url }}"
+        $uupId = $uupUrl.Split('=')[-1]  # Ekstrak ID dari URL
+        
+        # Gunakan API UUP Dump untuk mendapatkan file list
+        $apiUrl = "https://uupdump.net/get.php?id=$uupId&pack=en-us&edition=$env:EDITION"
+        $fileList = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing
+        
+        # Simpan file list
+        $fileList | Out-File -FilePath .\uup_files\filelist.txt -Encoding UTF8
+        
+        # Unduh semua file UUP menggunakan aria2
+        aria2c -i .\uup_files\filelist.txt -d .\uup_files -j 16 -x 16
+
+    - name: Assemble ISO
+      shell: powershell
+      run: |
+        cd .\uup_files
+        
+        # Ekstrak file UUP
+        Get-ChildItem *.cab | ForEach-Object {
+            Expand -R $_.FullName -F:* .\
+        }
+        
+        # Jalankan skrip pembuatan ISO
+        .\convert-UUP-to-ISO.ps1 -SourcePath . -OutputPath ..\source\Win11_UUP.iso -Edition $env:EDITION
+        
+        if (-not (Test-Path ..\source\Win11_UUP.iso)) {
+            throw "ISO assembly failed!"
+        }
+
+    - name: Build tiny11 ISO
+      shell: powershell
+      run: |
+        $isoPath = Resolve-Path ".\source\Win11_UUP.iso"
+        
+        .\tiny11maker.ps1 -IsoPath "$isoPath" `
+                           -Edition "$env:EDITION" `
+                           -UUPBuild `
+                           -NoTelemetry `
+                           -CompactOS
+        
+        if (-not (Test-Path .\output\*.iso)) {
+            throw "Build failed! Output ISO not found"
+        }
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: tiny11-uup-${{ github.event.inputs.uup_url.split('=')[-1] }}
+        path: .\output\*.iso
+        retention-days: 2
+
+    - name: Create GitHub release
+      if: ${{ success() && github.event_name == 'workflow_dispatch' }}
+      uses: softprops/action-gh-release@v1
+      with:
+        files: .\output\*.iso
+        tag_name: uup-${{ github.event.inputs.uup_url.split('=')[-1] }}-$(Get-Date -Format 'yyyyMMdd')
+        name: "tiny11 UUP Build"
+        body: |
+          Windows 11 Tiny Build from UUP Dump
+          - Edition: ${{ env.EDITION }}
+          - UUP ID: ${{ github.event.inputs.uup_url.split('=')[-1] }}
+          - Build date: $(Get-Date -Format 'yyyy-MM-dd HH:mm')
+        draft: false
+        prerelease: true
+
+    - name: Cleanup
+      shell: powershell
+      run: |
+        Remove-Item -Recurse -Force .\source -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force .\uup_files -ErrorAction SilentlyContinue
+        Remove-Item -Recurse -Force .\temp -ErrorAction SilentlyContinue
