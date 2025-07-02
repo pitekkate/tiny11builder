@@ -1,0 +1,44 @@
+name: Build Tiny11 ISO
+
+on:
+  push:
+    tags:
+      - 'v*' # Memicu workflow hanya saat ada tag versi baru
+  workflow_dispatch: # Memungkinkan menjalankan manual dari UI
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Git
+        run: |
+          winget install --id Git.Git -y
+
+      - name: Clone tiny11builder repo
+        run: |
+          git clone https://github.com/pitekkate/tiny11builder.git 
+
+      - name: Install dependencies
+        working-directory: tiny11builder
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run tiny11builder
+        working-directory: tiny11builder
+        run: |
+          python builder.py
+
+      - name: Upload ISO as Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: tiny11-iso
+          path: tiny11builder/output/*.iso
