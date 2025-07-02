@@ -4,7 +4,7 @@ on:
   workflow_dispatch: # Jalankan manual dari UI
   push:
     tags:
-      - 'v*' # Jalankan saat ada tag seperti v1.0
+      - 'v*' # Jalankan saat push tag seperti v1.0
 
 jobs:
   build:
@@ -25,6 +25,11 @@ jobs:
           # Define URLs and output path
           $url = "https://github.com/git-for-windows/git/releases/download/v2.45.2.windows.1/Git-2.45.2-64-bit.exe "
           $output = "$env:TEMP\git-installer.exe"
+
+          # Validasi URL (tidak ada spasi)
+          if ($url -ne $url.Trim()) {
+              throw "URL contains whitespace. Please fix the URL."
+          }
 
           # Download Git installer via curl
           curl.exe -L -o $output $url
