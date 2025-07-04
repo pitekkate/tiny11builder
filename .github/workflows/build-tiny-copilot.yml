@@ -93,7 +93,7 @@ jobs:
         oscdimg -b"$extractDir\boot\etfsboot.com" -u1 -udfver102 "$outputDir" "$finalIso"
         
     - name: Upload artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: tiny11-copilot-edition
         path: ${{ github.workspace }}/tiny11-copilot.iso
