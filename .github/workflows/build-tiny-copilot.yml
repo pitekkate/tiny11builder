@@ -1,0 +1,111 @@
+name: Build Tiny11 Copilot Edition
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 0 * * 0' # Run weekly on Sunday
+
+jobs:
+  build-tiny11:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        repository: ntdevlabs/tiny11builder
+        ref: main
+        
+    - name: Setup environment
+      shell: powershell
+      run: |
+        # Enable script execution
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+        
+        # Install dependencies
+        choco install -y 7zip wimlib
+        Import-Module .\tiny11Coremaker.ps1 -Force
+        
+    - name: Download source ISO
+      shell: powershell
+      run: |
+        $isoUrl = "https://archive.org/download/Nano11-25H2-Copilot-Edition-Beta-1/Nano11%2025h2%20Copilot%20Edition%20Beta%201.iso"
+        $isoPath = "$env:RUNNER_TEMP\source.iso"
+        
+        # Download with retry logic
+        $retryCount = 0
+        $maxRetries = 3
+        $downloadSuccess = $false
+        
+        while ($retryCount -lt $maxRetries -and -not $downloadSuccess) {
+            try {
+                Invoke-WebRequest -Uri $isoUrl -OutFile $isoPath -UseBasicParsing
+                if (Test-Path $isoPath -PathType Leaf) {
+                    $downloadSuccess = $true
+                    Write-Host "Download successful"
+                }
+            } catch {
+                $retryCount++
+                Write-Host "Attempt $retryCount failed, retrying..."
+                Start-Sleep -Seconds 10
+            }
+        }
+        
+        if (-not $downloadSuccess) {
+            Write-Error "Failed to download ISO after $maxRetries attempts"
+            exit 1
+        }
+        
+        # Verify ISO
+        $isoSize = (Get-Item $isoPath).Length / 1GB
+        if ($isoSize -lt 3 -or $isoSize -gt 6) {
+            Write-Error "Invalid ISO size: $isoSize GB"
+            exit 1
+        }
+        
+    - name: Extract and modify ISO
+      shell: powershell
+      run: |
+        $sourceIso = "$env:RUNNER_TEMP\source.iso"
+        $extractDir = "$env:RUNNER_TEMP\extracted"
+        $mountDir = "$env:RUNNER_TEMP\mount"
+        $outputDir = "$env:RUNNER_TEMP\output"
+        $finalIso = "$env:GITHUB_WORKSPACE\tiny11-copilot.iso"
+        
+        # Extract ISO
+        7z x -o"$extractDir" -y "$sourceIso"
+        
+        # Find install.wim/esd
+        $installFile = Get-ChildItem -Path $extractDir -Recurse -Include "install.wim","install.esd" | Select-Object -First 1
+        
+        if (-not $installFile) {
+            Write-Error "No install.wim or install.esd found"
+            exit 1
+        }
+        
+        # Run tiny11Coremaker modifications
+        .\tiny11Coremaker.ps1 -SourcePath $installFile.FullName -OutputPath "$extractDir\sources\install.wim" -Edition "Core" -BypassAll
+        
+        # Build new ISO
+        mkdir $outputDir -Force
+        Copy-Item -Path "$extractDir\*" -Destination $outputDir -Recurse -Force
+        
+        oscdimg -b"$extractDir\boot\etfsboot.com" -u1 -udfver102 "$outputDir" "$finalIso"
+        
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: tiny11-copilot-edition
+        path: ${{ github.workspace }}/tiny11-copilot.iso
+        retention-days: 7
+        
+    - name: Create release
+      if: success() && github.event_name == 'workflow_dispatch'
+      uses: softprops/action-gh-release@v1
+      with:
+        files: ${{ github.workspace }}/tiny11-copilot.iso
+        tag_name: tiny11-copilot-${{ github.run_id }}
+        body: |
+          Tiny11 Copilot Edition Build
+          - Source: ${{ github.event.inputs.source_url || 'https://archive.org/download/Nano11-25H2-Copilot-Edition-Beta-1/Nano11%2025h2%20Copilot%20Edition%20Beta%201.iso' }}
+          - Build Date: ${{ github.run_number }}
