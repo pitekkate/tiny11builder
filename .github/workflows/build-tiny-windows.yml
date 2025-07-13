@@ -15,6 +15,7 @@ jobs:
     - name: Checkout Repository
       uses: actions/checkout@v4
       with:
+        fetch-depth: 0
         submodules: recursive
 
     - name: Setup Build Environment
@@ -24,74 +25,46 @@ jobs:
         New-Item -ItemType Directory -Path ".\25h2" -Force
         
         # Buat file input untuk UUP Dump
-        $inputPath = ".\25h2\input.txt"
-        Set-Content -Path $inputPath -Value "$env:BUILD_VERSION`n$env:BUILD_LANG"
-        
-        # Tampilkan isi input.txt untuk verifikasi
-        Write-Host "Isi input.txt:"
-        Get-Content $inputPath
+        $inputContent = "$env:BUILD_VERSION`n$env:BUILD_LANG"
+        Set-Content -Path ".\25h2\input.txt" -Value $inputContent
         
         # Set execution policy
         Set-ExecutionPolicy Bypass -Scope Process -Force
-
-    - name: Verify UUP Script Exists
-      shell: powershell
-      working-directory: ./25h2
-      run: |
-        if (-not (Test-Path "uup_download_windows.cmd")) {
-            Write-Error "❌ uup_download_windows.cmd not found in 25h2 directory!"
-            Get-ChildItem -Path . -Recurse | Out-Host
-            exit 1
-        } else {
-            Write-Host "✅ uup_download_windows.cmd ditemukan"
-        }
 
     - name: Download UUP Dump ISO
       shell: powershell
       working-directory: ./25h2
       run: |
-        # Jalankan script UUP dan tangkap output
-        $output = Get-Content input.txt | .\uup_download_windows.cmd 2>&1 | Out-String
+        # Tampilkan isi input.txt
+        Write-Host "Isi input.txt:"
+        Get-Content input.txt
+        
+        # Jalankan script UUP
+        Write-Host "Memulai download Windows ISO..."
+        $output = cmd /c 'uup_download_windows.cmd < input.txt' 2>&1 | Out-String
         Write-Host $output
         
-        # Periksa apakah ada pesan error
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error "❌ Script download gagal dengan kode $LASTEXITCODE"
-            exit $LASTEXITCODE
+        # Cari ISO di dalam folder 25h2 (dan subfolder) saja
+        $iso = Get-ChildItem -Path . -Recurse -Include *.iso, *.ISO | Select-Object -First 1
+        if ($iso) {
+            Write-Host "✅ ISO ditemukan di: $($iso.FullName)"
+            # Simpan path ISO ke environment variable untuk langkah selanjutnya
+            echo "ISO_PATH=$($iso.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+        } else {
+            Write-Error "❌ ISO tidak ditemukan setelah proses download di dalam folder 25h2"
+            Write-Host "Struktur folder 25h2:"
+            Get-ChildItem -Path . -Recurse | Format-Table FullName
+            exit 1
         }
       env:
         _NO_HTTP_PROXY: 1
         _RETRY_DOWNLOAD: 1
 
-    - name: Show Directory Tree
-      shell: powershell
-      run: |
-        # Tampilkan struktur direktori setelah download
-        Write-Host "Struktur direktori setelah download:"
-        Get-ChildItem -Path . -Recurse | Format-Table FullName
-
-    - name: Locate ISO File
-      shell: powershell
-      run: |
-        # Cari file ISO dengan ekstensi .iso atau .ISO
-        $isoFile = Get-ChildItem -Path . -Recurse -Include *.iso, *.ISO |
-                   Where-Object { $_.FullName -notmatch '\\output\\' } |
-                   Select-Object -First 1
-        
-        if (-not $isoFile) {
-            Write-Error "❌ ISO file not found after download!"
-            # Tampilkan lagi struktur direktori untuk debug
-            Write-Host "Struktur direktori saat ini:"
-            Get-ChildItem -Path . -Recurse | Format-Table FullName
-            exit 1
-        }
-        echo "ISO_PATH=$($isoFile.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
-        Write-Host "Found ISO: $($isoFile.FullName)"
-
     - name: Install Dependencies
       shell: powershell
       run: |
         # Install modul PowerShell
+        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
         Install-PackageProvider -Name NuGet -Force -Scope CurrentUser
         Install-Module -Name 7Zip4Powershell -Force -Scope CurrentUser -AllowClobber
         Install-Module -Name VHD -Force -Scope CurrentUser -AcceptLicense
@@ -99,6 +72,7 @@ jobs:
     - name: Run Tiny11 Builder
       shell: powershell
       run: |
+        Write-Host "Menggunakan ISO: $env:ISO_PATH"
         .\tiny11Coremaker.ps1 -IsoPath "$env:ISO_PATH" `
           -SkipIntegrityCheck `
           -RemoveTeams `
@@ -110,9 +84,8 @@ jobs:
         $outputIso = Get-ChildItem -Path . -Filter "tiny11-*.iso" | Select-Object -First 1
         if (-not $outputIso) {
             throw "❌ Build failed! No output ISO found"
-        } else {
-            Write-Host "✅ Build berhasil: $($outputIso.FullName)"
         }
+        Write-Host "✅ Build berhasil: $($outputIso.FullName)"
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
