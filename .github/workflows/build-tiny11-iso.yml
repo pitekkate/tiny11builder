@@ -1,15 +1,15 @@
 name: Build Tiny11 ISO
 
 on:
-  workflow_dispatch: # Memungkinkan menjalankan secara manual
+  workflow_dispatch:
   schedule:
-    - cron: '0 0 * * 0' # Menjalankan otomatis setiap Minggu jam 00:00 UTC
+    - cron: '0 0 * * 0'
 
 jobs:
   build-tiny11:
     name: Build Tiny11
     runs-on: windows-latest
-    timeout-minutes: 180 # Maksimal 3 jam eksekusi
+    timeout-minutes: 180
 
     steps:
     - name: Checkout repository
@@ -18,25 +18,32 @@ jobs:
     - name: Setup environment
       shell: powershell
       run: |
-        # Mengizinkan eksekusi skrip PowerShell
         Set-ExecutionPolicy Unrestricted -Scope Process -Force
-        
-        # Menginstal modul yang diperlukan
         Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
         Install-Module -Name 7Zip4PowerShell -Force -Confirm:$false
 
-    - name: Download scripts
+    - name: Download all required files
       shell: powershell
       run: |
+        # Buat struktur folder yang diperlukan
+        New-Item -Path ".\files" -ItemType Directory -Force
+        
+        # Download skrip utama
         Invoke-WebRequest -Uri "https://raw.githubusercontent.com/pitekkate/tiny11builder/main/25h2/uup_download_windows.cmd" -OutFile "uup_download_windows.cmd"
         Invoke-WebRequest -Uri "https://raw.githubusercontent.com/pitekkate/tiny11builder/main/tiny11Coremaker.ps1" -OutFile "tiny11Coremaker.ps1"
+        
+        # Download dependensi yang hilang
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/pitekkate/tiny11builder/main/25h2/files/get_aria2.ps1" -OutFile "files\get_aria2.ps1"
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/pitekkate/tiny11builder/main/25h2/files/aria2.exe" -OutFile "files\aria2.exe"
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/pitekkate/tiny11builder/main/25h2/files/ConvertConfig.ps1" -OutFile "files\ConvertConfig.ps1"
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/pitekkate/tiny11builder/main/25h2/files/uup_download_macos" -OutFile "files\uup_download_macos"
 
     - name: Download Windows ISO
       shell: cmd
       run: |
-        call uup_download_windows.cmd
+        uup_download_windows.cmd
       env:
-        _COMPLETE: "y" # Otomatisasi proses download
+        _COMPLETE: "y"
 
     - name: Find downloaded ISO
       id: find-iso
@@ -48,6 +55,7 @@ jobs:
           Write-Output "iso_file=$($iso.Name)" >> $env:GITHUB_OUTPUT
         } else {
           Write-Error "ISO file not found!"
+          Get-ChildItem -Path . -Recurse | Out-String | Write-Output
           exit 1
         }
 
@@ -58,7 +66,7 @@ jobs:
       env:
         ISO_FILE: ${{ env.ISO_FILE }}
 
-    - name: Upload Tiny11 ISO artifact
+    - name: Upload Tiny11 ISO
       uses: actions/upload-artifact@v4
       with:
         name: tiny11-iso
