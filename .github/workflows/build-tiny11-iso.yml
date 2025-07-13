@@ -26,10 +26,10 @@ jobs:
         Install-Module -Name 7Zip4PowerShell -Force -Confirm:$false
 
     - name: Download scripts
-      shell: cmd
+      shell: powershell
       run: |
-        curl -L -o uup_download_windows.cmd https://raw.githubusercontent.com/pitekkate/tiny11builder/main/25h2/uup_download_windows.cmd
-        curl -L -o tiny11Coremaker.ps1 https://raw.githubusercontent.com/pitekkate/tiny11builder/main/tiny11Coremaker.ps1
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/pitekkate/tiny11builder/main/25h2/uup_download_windows.cmd" -OutFile "uup_download_windows.cmd"
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/pitekkate/tiny11builder/main/tiny11Coremaker.ps1" -OutFile "tiny11Coremaker.ps1"
 
     - name: Download Windows ISO
       shell: cmd
@@ -44,8 +44,8 @@ jobs:
       run: |
         $iso = Get-ChildItem -Path . -Filter *.iso | Select-Object -First 1
         if ($iso) {
-          echo "ISO_FILE=$($iso.Name)" | Out-File -FilePath $env:GITHUB_ENV -Append
-          echo "::set-output name=iso_file::$($iso.Name)"
+          Write-Output "ISO_FILE=$($iso.Name)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          Write-Output "iso_file=$($iso.Name)" >> $env:GITHUB_OUTPUT
         } else {
           Write-Error "ISO file not found!"
           exit 1
@@ -58,11 +58,19 @@ jobs:
       env:
         ISO_FILE: ${{ env.ISO_FILE }}
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v3
+    - name: Upload Tiny11 ISO artifact
+      uses: actions/upload-artifact@v4
       with:
         name: tiny11-iso
         path: |
           *tiny11*.iso
-          *tiny11*.txt
+        retention-days: 3
+
+    - name: Upload logs
+      uses: actions/upload-artifact@v4
+      with:
+        name: build-logs
+        path: |
+          *.txt
+          *.log
         retention-days: 3
