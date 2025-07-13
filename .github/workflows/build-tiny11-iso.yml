@@ -1,0 +1,68 @@
+name: Build Tiny11 ISO
+
+on:
+  workflow_dispatch: # Memungkinkan menjalankan secara manual
+  schedule:
+    - cron: '0 0 * * 0' # Menjalankan otomatis setiap Minggu jam 00:00 UTC
+
+jobs:
+  build-tiny11:
+    name: Build Tiny11
+    runs-on: windows-latest
+    timeout-minutes: 180 # Maksimal 3 jam eksekusi
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Setup environment
+      shell: powershell
+      run: |
+        # Mengizinkan eksekusi skrip PowerShell
+        Set-ExecutionPolicy Unrestricted -Scope Process -Force
+        
+        # Menginstal modul yang diperlukan
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force
+        Install-Module -Name 7Zip4PowerShell -Force -Confirm:$false
+
+    - name: Download scripts
+      shell: cmd
+      run: |
+        curl -L -o uup_download_windows.cmd https://raw.githubusercontent.com/pitekkate/tiny11builder/main/25h2/uup_download_windows.cmd
+        curl -L -o tiny11Coremaker.ps1 https://raw.githubusercontent.com/pitekkate/tiny11builder/main/tiny11Coremaker.ps1
+
+    - name: Download Windows ISO
+      shell: cmd
+      run: |
+        call uup_download_windows.cmd
+      env:
+        _COMPLETE: "y" # Otomatisasi proses download
+
+    - name: Find downloaded ISO
+      id: find-iso
+      shell: powershell
+      run: |
+        $iso = Get-ChildItem -Path . -Filter *.iso | Select-Object -First 1
+        if ($iso) {
+          echo "ISO_FILE=$($iso.Name)" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "::set-output name=iso_file::$($iso.Name)"
+        } else {
+          Write-Error "ISO file not found!"
+          exit 1
+        }
+
+    - name: Build Tiny11
+      shell: powershell
+      run: |
+        .\tiny11Coremaker.ps1 -IsoPath "$env:ISO_FILE"
+      env:
+        ISO_FILE: ${{ env.ISO_FILE }}
+
+    - name: Upload artifact
+      uses: actions/upload-artifact@v3
+      with:
+        name: tiny11-iso
+        path: |
+          *tiny11*.iso
+          *tiny11*.txt
+        retention-days: 3
