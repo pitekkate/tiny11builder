@@ -1,52 +1,91 @@
 name: Build Tiny11 Windows
 
 on:
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 jobs:
   build-tiny11:
     runs-on: windows-latest
-    timeout-minutes: 120  # Waktu eksekusi maksimum
+    timeout-minutes: 180
+    env:
+      BUILD_VERSION: "22631.2861"
+      BUILD_LANG: "en-us"
 
     steps:
     - name: Checkout Repository
       uses: actions/checkout@v4
-
-    - name: Download UUP Dump ISO
-      shell: cmd
-      working-directory: ./25h2
-      run: |
-        uup_download_windows.cmd < input.txt
-      env:
-        _NO_HTTP_PROXY: 1  # Optional: Untuk masalah proxy
-      continue-on-error: false
+      with:
+        submodules: recursive  # Pastikan semua submodul ter-download
 
     - name: Setup Build Environment
       shell: powershell
       run: |
-        # Buat file input otomatis untuk UUP Dump
-        Set-Content -Path .\25h2\input.txt -Value "22631.2861`nen-us"
+        # Buat folder jika belum ada
+        New-Item -ItemType Directory -Path ".\25h2" -Force
         
-        # Temukan file ISO yang diunduh
-        $isoFile = Get-ChildItem -Path .\25h2 -Filter *.iso | Select-Object -First 1
+        # Buat file input untuk UUP Dump
+        Set-Content -Path ".\25h2\input.txt" -Value "$env:BUILD_VERSION`n$env:BUILD_LANG"
+        
+        # Set execution policy
+        Set-ExecutionPolicy Bypass -Scope Process -Force
+
+    - name: Verify UUP Script Exists
+      shell: powershell
+      working-directory: ./25h2
+      run: |
+        if (-not (Test-Path "uup_download_windows.cmd")) {
+            Write-Error "❌ uup_download_windows.cmd not found in 25h2 directory!"
+            Get-ChildItem -Path . -Recurse | Out-Host
+            exit 1
+        }
+
+    - name: Download UUP Dump ISO
+      shell: powershell
+      working-directory: ./25h2
+      run: |
+        # Gunikan PowerShell untuk handling input yang lebih baik
+        Get-Content input.txt | .\uup_download_windows.cmd
+      env:
+        _NO_HTTP_PROXY: 1
+        _RETRY_DOWNLOAD: 1
+
+    - name: Locate ISO File
+      shell: powershell
+      run: |
+        # Cari ISO di seluruh direktori
+        $isoFile = Get-ChildItem -Path . -Filter *.iso -Recurse | 
+                   Where-Object { $_.FullName -notmatch '\\output\\' } | 
+                   Select-Object -First 1
+        
         if (-not $isoFile) {
-            Write-Error "ISO file not found!"
+            Write-Error "❌ ISO file not found!"
+            Get-ChildItem -Path . -Recurse | Out-Host
             exit 1
         }
         echo "ISO_PATH=$($isoFile.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+        echo "Found ISO: $($isoFile.FullName)"
 
     - name: Install Dependencies
       shell: powershell
       run: |
-        # Install modul PowerShell yang diperlukan
+        # Install modul PowerShell
         Install-PackageProvider -Name NuGet -Force -Scope CurrentUser
         Install-Module -Name 7Zip4Powershell -Force -Scope CurrentUser -AllowClobber
-        Install-Module -Name VHD -Force -Scope CurrentUser
+        Install-Module -Name VHD -Force -Scope CurrentUser -AcceptLicense
 
     - name: Run Tiny11 Builder
       shell: powershell
       run: |
-        .\tiny11Coremaker.ps1 -IsoPath "$env:ISO_PATH" -SkipIntegrityCheck -RemoveTeams -RemoveEdge -RemoveOneDrive
+        .\tiny11Coremaker.ps1 -IsoPath "$env:ISO_PATH" `
+          -SkipIntegrityCheck `
+          -RemoveTeams `
+          -RemoveEdge `
+          -RemoveOneDrive `
+          -Verbose
+        
+        if (-not (Test-Path ".\tiny11-*.iso")) {
+            throw "❌ Build failed! No output ISO found"
+        }
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
