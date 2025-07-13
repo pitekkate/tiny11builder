@@ -49,7 +49,7 @@ jobs:
         .\tiny11Coremaker.ps1 -IsoPath "$env:ISO_PATH" -SkipIntegrityCheck -RemoveTeams -RemoveEdge -RemoveOneDrive
 
     - name: Upload Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: tiny11-image
         path: |
