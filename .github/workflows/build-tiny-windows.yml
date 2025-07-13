@@ -1,120 +1,58 @@
-name: Build tiny11 25H2 Beta ISO
+name: Build Tiny11 Windows
 
 on:
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger
 
 jobs:
-  build-tiny11-25h2-beta:
+  build-tiny11:
     runs-on: windows-latest
-    timeout-minutes: 240
-    env:
-      WIN_VERSION: 25H2_Beta
-      EDITION: Professional
+    timeout-minutes: 120  # Waktu eksekusi maksimum
 
     steps:
-    - name: Checkout repository
+    - name: Checkout Repository
       uses: actions/checkout@v4
 
-    - name: Setup environment
+    - name: Download UUP Dump ISO
+      shell: cmd
+      working-directory: ./25h2
+      run: |
+        uup_download_windows.cmd < input.txt
+      env:
+        _NO_HTTP_PROXY: 1  # Optional: Untuk masalah proxy
+      continue-on-error: false
+
+    - name: Setup Build Environment
       shell: powershell
       run: |
-        Set-ExecutionPolicy Bypass -Scope Process -Force
-        New-Item -ItemType Directory -Path .\source,\output -Force
-        Install-PackageProvider -Name NuGet -Force
-        Install-Module -Name 7Zip4Powershell -Force -Confirm:$false
+        # Buat file input otomatis untuk UUP Dump
+        Set-Content -Path .\25h2\input.txt -Value "22631.2861`nen-us"
+        
+        # Temukan file ISO yang diunduh
+        $isoFile = Get-ChildItem -Path .\25h2 -Filter *.iso | Select-Object -First 1
+        if (-not $isoFile) {
+            Write-Error "ISO file not found!"
+            exit 1
+        }
+        echo "ISO_PATH=$($isoFile.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-    - name: Download Windows 11 25H2 Beta ISO
+    - name: Install Dependencies
       shell: powershell
       run: |
-        $url = "https://archive.org/download/Nano11-25H2-Beta-1/Nano11%2025H2%20Beta%201.iso"
-        $output = ".\source\Win11_25H2_Beta.iso"
-        
-        # Header khusus untuk archive.org
-        $headers = @{
-            "Referer" = "https://archive.org/"
-            "User-Agent" = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        }
-        
-        # Menggunakan WebClient yang kompatibel
-        $webClient = New-Object System.Net.WebClient
-        $webClient.Headers.Add("Referer", "https://archive.org/")
-        $webClient.Headers.Add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-        
-        $retryCount = 5  # Lebih banyak retry karena archive.org kadang lambat
-        for ($i = 1; $i -le $retryCount; $i++) {
-            try {
-                Write-Host "Download attempt #$i"
-                $webClient.DownloadFile($url, $output)
-                
-                if (Test-Path $output) {
-                    $fileSize = (Get-Item $output).Length / 1GB
-                    Write-Host "Download successful! Size: $($fileSize.ToString('0.00')) GB"
-                    
-                    # Verifikasi ukuran file minimal
-                    if ($fileSize -lt 3) {
-                        throw "File size too small! Possible incomplete download."
-                    }
-                    break
-                }
-            }
-            catch {
-                Write-Warning "Attempt $i failed: $($_.Exception.Message)"
-                if (Test-Path $output) { Remove-Item $output -Force }
-                
-                if ($i -lt $retryCount) {
-                    $retryDelay = [math]::Pow(2, $i) * 10  # Exponential backoff
-                    Write-Host "Retrying in $retryDelay seconds..."
-                    Start-Sleep -Seconds $retryDelay
-                } else {
-                    Write-Error "Failed to download after $retryCount attempts"
-                    exit 1
-                }
-            }
-        }
+        # Install modul PowerShell yang diperlukan
+        Install-PackageProvider -Name NuGet -Force -Scope CurrentUser
+        Install-Module -Name 7Zip4Powershell -Force -Scope CurrentUser -AllowClobber
+        Install-Module -Name VHD -Force -Scope CurrentUser
 
-    - name: Build tiny11 ISO
+    - name: Run Tiny11 Builder
       shell: powershell
       run: |
-        $isoPath = Resolve-Path ".\source\Win11_25H2_Beta.iso"
-        
-        # Fitur khusus untuk versi beta
-        .\tiny11maker.ps1 -IsoPath "$isoPath" `
-                           -Edition "$env:EDITION" `
-                           -NoTelemetry `
-                           -BetaBuild `
-                           -SkipComponent "WindowsMixedReality" `
-                           -SkipComponent "Edge"
-        
-        # Periksa hasil
-        if (-not (Test-Path .\output\*25H2*.iso)) {
-            throw "Build failed! Output ISO not found"
-        }
+        .\tiny11Coremaker.ps1 -IsoPath "$env:ISO_PATH" -SkipIntegrityCheck -RemoveTeams -RemoveEdge -RemoveOneDrive
 
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
+    - name: Upload Artifact
+      uses: actions/upload-artifact@v3
       with:
-        name: tiny11-25H2-Beta-${{ env.EDITION }}
-        path: .\output\*.iso
-        retention-days: 2
-
-    - name: Create GitHub release
-      if: ${{ success() && github.event_name == 'workflow_dispatch' }}
-      uses: softprops/action-gh-release@v1
-      with:
-        files: .\output\*.iso
-        tag_name: 25H2-Beta-$(Get-Date -Format 'yyyyMMdd')
-        name: "tiny11 25H2 Beta ${{ env.EDITION }}"
-        body: |
-          Windows 11 25H2 Beta Tiny Build
-          - Edition: ${{ env.EDITION }}
-          - Build date: $(Get-Date -Format 'yyyy-MM-dd HH:mm')
-          - Source: Archive.org Nano11 Beta ISO
-          - Note: Experimental build, not for production use
-        draft: false
-        prerelease: true
-
-    - name: Cleanup
-      shell: powershell
-      run: |
-        Remove-Item -Recurse -Force .\source -ErrorAction SilentlyContinue
-        Remove-Item -Recurse -Force .\temp -ErrorAction SilentlyContinue
+        name: tiny11-image
+        path: |
+          tiny11-*.iso
+          .\output\*
+        retention-days: 1
