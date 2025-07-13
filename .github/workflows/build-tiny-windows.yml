@@ -6,7 +6,7 @@ on:
 jobs:
   build-tiny11:
     runs-on: windows-latest
-    timeout-minutes: 180
+    timeout-minutes: 240  # Diperpanjang karena proses kompresi memakan waktu
     env:
       BUILD_VERSION: "22631.2861"
       BUILD_LANG: "en-us"
@@ -21,43 +21,27 @@ jobs:
     - name: Setup Build Environment
       shell: powershell
       run: |
-        # Buat folder 25h2 jika belum ada
         New-Item -ItemType Directory -Path ".\25h2" -Force
-        
-        # Buat file input untuk UUP Dump
         $inputContent = "$env:BUILD_VERSION`n$env:BUILD_LANG"
         Set-Content -Path ".\25h2\input.txt" -Value $inputContent
-        
-        # Tampilkan isi input.txt untuk verifikasi
         Write-Host "Isi input.txt:"
         Get-Content ".\25h2\input.txt"
-        
-        # Set execution policy
         Set-ExecutionPolicy Bypass -Scope Process -Force
 
     - name: Download Required Tools
       shell: powershell
       working-directory: ./25h2
       run: |
-        # Buat folder files jika belum ada
         New-Item -ItemType Directory -Path ".\files" -Force
-        
-        # Download aria2c.exe
         $aria2Url = "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip"
         $aria2Zip = "aria2.zip"
         Invoke-WebRequest -Uri $aria2Url -OutFile $aria2Zip
         Expand-Archive -Path $aria2Zip -DestinationPath .\files
         Move-Item -Path .\files\aria2-1.37.0-win-64bit-build1\aria2c.exe -Destination .\files\ -Force
-        
-        # Download 7zr.exe
         $7zrUrl = "https://www.7-zip.org/a/7zr.exe"
         Invoke-WebRequest -Uri $7zrUrl -OutFile .\files\7zr.exe
-        
-        # Download uup-converter-wimlib.7z
         $converterUrl = "https://github.com/uup-dump/converter/releases/download/v0.9.0/uup-converter-wimlib-0.9.0.7z"
         Invoke-WebRequest -Uri $converterUrl -OutFile .\files\uup-converter-wimlib.7z
-        
-        # Hapus file sementara
         Remove-Item $aria2Zip -Force
         Remove-Item .\files\aria2-1.37.0-win-64bit-build1 -Recurse -Force
 
@@ -65,18 +49,11 @@ jobs:
       shell: powershell
       working-directory: ./25h2
       run: |
-        # Dapatkan input
         $version = Get-Content -Path .\input.txt -TotalCount 1
         $lang = Get-Content -Path .\input.txt -TotalCount 2 | Select-Object -Skip 1
-        
-        # Jalankan script dengan parameter
         .\uup_download_windows.cmd -v "$version" -l "$lang"
-        
-        # Verifikasi folder download
         $downloadDir = Get-ChildItem -Path . -Directory | Where-Object { $_.Name -match $version } | Select-Object -First 1
-        if (-not $downloadDir) {
-            throw "❌ Folder download tidak ditemukan"
-        }
+        if (-not $downloadDir) { throw "❌ Folder download tidak ditemukan" }
         Write-Host "Folder download: $($downloadDir.FullName)"
 
     - name: Convert to ISO
@@ -85,33 +62,22 @@ jobs:
       run: |
         $version = Get-Content -Path .\input.txt -TotalCount 1
         $downloadDir = Get-ChildItem -Path . -Directory | Where-Object { $_.Name -match $version } | Select-Object -First 1
-        
-        if (-not $downloadDir) {
-            throw "❌ Folder download tidak ditemukan"
-        }
-        
-        # Cari script konversi
+        if (-not $downloadDir) { throw "❌ Folder download tidak ditemukan" }
         $convertScript = Get-ChildItem -Path $downloadDir.FullName -Filter "*.cmd" -Recurse | 
                         Where-Object { $_.Name -match "convert" } | 
                         Select-Object -First 1
-        
         if ($convertScript) {
             Write-Host "Menjalankan script konversi: $($convertScript.FullName)"
             Set-Location -Path $convertScript.DirectoryName
             & $convertScript.FullName
         }
-        
-        # Cari file ISO
         $isoFile = Get-ChildItem -Path $downloadDir.FullName -Filter *.iso -Recurse | Select-Object -First 1
-        
         if ($isoFile) {
             Write-Host "✅ File ISO ditemukan: $($isoFile.FullName)"
             $destPath = Join-Path -Path $env:GITHUB_WORKSPACE -ChildPath "windows.iso"
             Copy-Item -Path $isoFile.FullName -Destination $destPath -Force
             echo "ISO_PATH=$destPath" | Out-File -FilePath $env:GITHUB_ENV -Append
-        } else {
-            throw "❌ File ISO tidak ditemukan setelah konversi"
-        }
+        } else { throw "❌ File ISO tidak ditemukan setelah konversi" }
 
     - name: Install Dependencies
       shell: powershell
@@ -124,28 +90,40 @@ jobs:
     - name: Run Tiny11 Builder
       shell: powershell
       run: |
-        if (-not (Test-Path $env:ISO_PATH)) {
-            throw "❌ File ISO tidak ditemukan: $env:ISO_PATH"
-        }
-        
-        .\tiny11Coremaker.ps1 -IsoPath "$env:ISO_PATH" `
-          -SkipIntegrityCheck `
-          -RemoveTeams `
-          -RemoveEdge `
-          -RemoveOneDrive `
-          -Verbose
-        
+        if (-not (Test-Path $env:ISO_PATH)) { throw "❌ File ISO tidak ditemukan: $env:ISO_PATH" }
+        .\tiny11Coremaker.ps1 -IsoPath "$env:ISO_PATH" -SkipIntegrityCheck -RemoveTeams -RemoveEdge -RemoveOneDrive -Verbose
         $outputIso = Get-ChildItem -Path . -Filter "tiny11-*.iso" | Select-Object -First 1
-        if (-not $outputIso) {
-            throw "❌ Build failed! No output ISO found"
-        }
+        if (-not $outputIso)) { throw "❌ Build failed! No output ISO found" }
         Write-Host "✅ Build berhasil: $($outputIso.FullName)"
+        echo "OUTPUT_ISO=$($outputIso.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+    - name: Compress ISO
+      shell: powershell
+      run: |
+        # Kompresi menggunakan 7-Zip dengan kompresi maksimal
+        $originalIso = $env:OUTPUT_ISO
+        $compressedIso = "$originalIso.7z"
+        
+        # Gunakan kompresi LZMA2 dengan level ultra
+        Compress-7Zip -ArchiveFileName $compressedIso -Path $originalIso -Format SevenZip -CompressionLevel Ultra
+        
+        # Periksa ukuran file
+        $originalSize = (Get-Item $originalIso).Length / 1GB
+        $compressedSize = (Get-Item $compressedIso).Length / 1GB
+        $savings = (1 - ($compressedSize / $originalSize)) * 100
+        
+        Write-Host "✅ Kompresi berhasil!"
+        Write-Host "Ukuran asli: $([math]::Round($originalSize, 2)) GB"
+        Write-Host "Ukuran terkompresi: $([math]::Round($compressedSize, 2)) GB"
+        Write-Host "Penghematan: $([math]::Round($savings, 1))%"
+        
+        echo "COMPRESSED_ISO=$compressedIso" | Out-File -FilePath $env:GITHUB_ENV -Append
 
     - name: Upload Artifact
       uses: actions/upload-artifact@v4
       with:
         name: tiny11-image
         path: |
-          tiny11-*.iso
+          ${{ env.COMPRESSED_ISO }}
           .\output\*
-        retention-days: 1
+        retention-days: 3
