@@ -28,42 +28,94 @@ jobs:
         $inputContent = "$env:BUILD_VERSION`n$env:BUILD_LANG"
         Set-Content -Path ".\25h2\input.txt" -Value $inputContent
         
+        # Tampilkan isi input.txt untuk verifikasi
+        Write-Host "Isi input.txt:"
+        Get-Content ".\25h2\input.txt"
+        
         # Set execution policy
         Set-ExecutionPolicy Bypass -Scope Process -Force
 
-    - name: Download UUP Dump ISO
+    - name: Download Required Tools
       shell: powershell
       working-directory: ./25h2
       run: |
-        # Tampilkan isi input.txt
-        Write-Host "Isi input.txt:"
-        Get-Content input.txt
+        # Buat folder files jika belum ada
+        New-Item -ItemType Directory -Path ".\files" -Force
         
-        # Jalankan script UUP
-        Write-Host "Memulai download Windows ISO..."
-        $output = cmd /c 'uup_download_windows.cmd < input.txt' 2>&1 | Out-String
-        Write-Host $output
+        # Download aria2c.exe
+        $aria2Url = "https://github.com/aria2/aria2/releases/download/release-1.37.0/aria2-1.37.0-win-64bit-build1.zip"
+        $aria2Zip = "aria2.zip"
+        Invoke-WebRequest -Uri $aria2Url -OutFile $aria2Zip
+        Expand-Archive -Path $aria2Zip -DestinationPath .\files
+        Move-Item -Path .\files\aria2-1.37.0-win-64bit-build1\aria2c.exe -Destination .\files\ -Force
         
-        # Cari ISO di dalam folder 25h2 (dan subfolder) saja
-        $iso = Get-ChildItem -Path . -Recurse -Include *.iso, *.ISO | Select-Object -First 1
-        if ($iso) {
-            Write-Host "✅ ISO ditemukan di: $($iso.FullName)"
-            # Simpan path ISO ke environment variable untuk langkah selanjutnya
-            echo "ISO_PATH=$($iso.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
-        } else {
-            Write-Error "❌ ISO tidak ditemukan setelah proses download di dalam folder 25h2"
-            Write-Host "Struktur folder 25h2:"
-            Get-ChildItem -Path . -Recurse | Format-Table FullName
-            exit 1
+        # Download 7zr.exe
+        $7zrUrl = "https://www.7-zip.org/a/7zr.exe"
+        Invoke-WebRequest -Uri $7zrUrl -OutFile .\files\7zr.exe
+        
+        # Download uup-converter-wimlib.7z
+        $converterUrl = "https://github.com/uup-dump/converter/releases/download/v0.9.0/uup-converter-wimlib-0.9.0.7z"
+        Invoke-WebRequest -Uri $converterUrl -OutFile .\files\uup-converter-wimlib.7z
+        
+        # Hapus file sementara
+        Remove-Item $aria2Zip -Force
+        Remove-Item .\files\aria2-1.37.0-win-64bit-build1 -Recurse -Force
+
+    - name: Run UUP Download Script
+      shell: powershell
+      working-directory: ./25h2
+      run: |
+        # Dapatkan input
+        $version = Get-Content -Path .\input.txt -TotalCount 1
+        $lang = Get-Content -Path .\input.txt -TotalCount 2 | Select-Object -Skip 1
+        
+        # Jalankan script dengan parameter
+        .\uup_download_windows.cmd -v "$version" -l "$lang"
+        
+        # Verifikasi folder download
+        $downloadDir = Get-ChildItem -Path . -Directory | Where-Object { $_.Name -match $version } | Select-Object -First 1
+        if (-not $downloadDir) {
+            throw "❌ Folder download tidak ditemukan"
         }
-      env:
-        _NO_HTTP_PROXY: 1
-        _RETRY_DOWNLOAD: 1
+        Write-Host "Folder download: $($downloadDir.FullName)"
+
+    - name: Convert to ISO
+      shell: powershell
+      working-directory: ./25h2
+      run: |
+        $version = Get-Content -Path .\input.txt -TotalCount 1
+        $downloadDir = Get-ChildItem -Path . -Directory | Where-Object { $_.Name -match $version } | Select-Object -First 1
+        
+        if (-not $downloadDir) {
+            throw "❌ Folder download tidak ditemukan"
+        }
+        
+        # Cari script konversi
+        $convertScript = Get-ChildItem -Path $downloadDir.FullName -Filter "*.cmd" -Recurse | 
+                        Where-Object { $_.Name -match "convert" } | 
+                        Select-Object -First 1
+        
+        if ($convertScript) {
+            Write-Host "Menjalankan script konversi: $($convertScript.FullName)"
+            Set-Location -Path $convertScript.DirectoryName
+            & $convertScript.FullName
+        }
+        
+        # Cari file ISO
+        $isoFile = Get-ChildItem -Path $downloadDir.FullName -Filter *.iso -Recurse | Select-Object -First 1
+        
+        if ($isoFile) {
+            Write-Host "✅ File ISO ditemukan: $($isoFile.FullName)"
+            $destPath = Join-Path -Path $env:GITHUB_WORKSPACE -ChildPath "windows.iso"
+            Copy-Item -Path $isoFile.FullName -Destination $destPath -Force
+            echo "ISO_PATH=$destPath" | Out-File -FilePath $env:GITHUB_ENV -Append
+        } else {
+            throw "❌ File ISO tidak ditemukan setelah konversi"
+        }
 
     - name: Install Dependencies
       shell: powershell
       run: |
-        # Install modul PowerShell
         Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
         Install-PackageProvider -Name NuGet -Force -Scope CurrentUser
         Install-Module -Name 7Zip4Powershell -Force -Scope CurrentUser -AllowClobber
@@ -72,7 +124,10 @@ jobs:
     - name: Run Tiny11 Builder
       shell: powershell
       run: |
-        Write-Host "Menggunakan ISO: $env:ISO_PATH"
+        if (-not (Test-Path $env:ISO_PATH)) {
+            throw "❌ File ISO tidak ditemukan: $env:ISO_PATH"
+        }
+        
         .\tiny11Coremaker.ps1 -IsoPath "$env:ISO_PATH" `
           -SkipIntegrityCheck `
           -RemoveTeams `
@@ -80,7 +135,6 @@ jobs:
           -RemoveOneDrive `
           -Verbose
         
-        # Verifikasi output
         $outputIso = Get-ChildItem -Path . -Filter "tiny11-*.iso" | Select-Object -First 1
         if (-not $outputIso) {
             throw "❌ Build failed! No output ISO found"
